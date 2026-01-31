@@ -32,6 +32,7 @@ import type {
   FullResult,
 } from '@playwright/test/reporter';
 import * as path from 'path';
+import * as fs from 'fs';
 
 import type { AgenticReporterOptions, ResolvedOptions, FailureContext } from './types';
 import { classifyError } from './hints';
@@ -51,6 +52,7 @@ const DEFAULTS: ResolvedOptions = {
   maxLogLines: 5,
   maxLogChars: 500,
   includeAttachments: true,
+  enableDetailedReport: true,
   outputStream: process.stdout,
 };
 
@@ -64,6 +66,7 @@ function resolveOptions(options: AgenticReporterOptions = {}): ResolvedOptions {
     maxLogLines: options.maxLogLines ?? DEFAULTS.maxLogLines,
     maxLogChars: options.maxLogChars ?? DEFAULTS.maxLogChars,
     includeAttachments: options.includeAttachments ?? DEFAULTS.includeAttachments,
+    enableDetailedReport: options.enableDetailedReport ?? DEFAULTS.enableDetailedReport,
     outputStream: options.outputStream ?? DEFAULTS.outputStream,
   };
 
@@ -88,6 +91,7 @@ class AgenticReporter implements Reporter {
   private totalDuration = 0;
   private projectName = 'chromium';
   private suppressedCount = 0;
+  private outputDir = 'test-results';
 
   constructor(options: AgenticReporterOptions = {}) {
     this.options = resolveOptions(options);
@@ -96,6 +100,8 @@ class AgenticReporter implements Reporter {
   onBegin(config: FullConfig, suite: Suite): void {
     const totalTests = suite.allTests().length;
     const workers = config.workers;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.outputDir = (config as any).outputDir || 'test-results';
 
     // Get project name from first project if available
     if (config.projects.length > 0) {
@@ -154,9 +160,46 @@ class AgenticReporter implements Reporter {
     const error = result.error;
     const errorMessage = error?.message ?? 'Unknown error';
     const { type: errorType, hint } = classifyError(errorMessage);
+    const failureId = sanitizeId(test.titlePath().join('_'));
+    let detailsPath: string | undefined;
+
+    // Generate detailed report if enabled
+    if (this.options.enableDetailedReport) {
+      const fullContext: FailureContext = {
+        failureId,
+        errorType,
+        fileName: path.basename(test.location.file),
+        lineNumber: test.location.line,
+        duration: result.duration,
+        retry: result.retry,
+        errorMessage,
+        stack: cleanStack(error?.stack ?? '', 1000), // High limit for detailed report
+        logs: this.getConsoleLogs(result, Infinity, Infinity),
+        attachments: this.options.includeAttachments ? this.getAttachments(result) : '',
+        hint,
+        title: test.title,
+        reproduceCommand: `npx playwright test ${test.location.file}:${test.location.line} --project=${this.projectName}`,
+      };
+
+      const fileContent = formatFailure(fullContext, {
+        ...this.options,
+        maxLogLines: Infinity,
+      });
+
+      const fileName = `${failureId}-details.xml`;
+      const fullPath = path.join(this.outputDir, fileName);
+      detailsPath = fullPath;
+
+      try {
+        fs.mkdirSync(this.outputDir, { recursive: true });
+        fs.writeFileSync(fullPath, fileContent);
+      } catch (err) {
+        console.warn(`[AgenticReporter] Failed to write detailed report to ${fullPath}:`, err);
+      }
+    }
 
     const context: FailureContext = {
-      failureId: sanitizeId(test.titlePath().join('_')),
+      failureId,
       errorType,
       fileName: path.basename(test.location.file),
       lineNumber: test.location.line,
@@ -164,18 +207,19 @@ class AgenticReporter implements Reporter {
       retry: result.retry,
       errorMessage,
       stack: cleanStack(error?.stack ?? '', this.options.maxStackFrames),
-      logs: this.getConsoleLogs(result),
+      logs: this.getConsoleLogs(result, this.options.maxLogLines, this.options.maxLogChars),
       attachments: this.options.includeAttachments ? this.getAttachments(result) : '',
       hint,
       title: test.title,
       reproduceCommand: `npx playwright test ${test.location.file}:${test.location.line} --project=${this.projectName}`,
+      detailsPath,
     };
 
     this.write(formatFailure(context, this.options));
   }
 
   /** Extract console logs from test result */
-  private getConsoleLogs(result: TestResult): string {
+  private getConsoleLogs(result: TestResult, maxLines: number, maxChars: number): string {
     const allOutput: string[] = [];
 
     // Process stdout (test code console.log)
@@ -192,12 +236,12 @@ class AgenticReporter implements Reporter {
 
     // Filter empty lines and take last N
     const filtered = allOutput.filter((line) => line.trim() !== '');
-    const lastLines = filtered.slice(-this.options.maxLogLines);
+    const lastLines = filtered.slice(-maxLines);
 
     // Truncate if too long
     let output = lastLines.join('\n');
-    if (output.length > this.options.maxLogChars) {
-      output = output.slice(0, this.options.maxLogChars) + '\n[...truncated]';
+    if (output.length > maxChars) {
+      output = output.slice(0, maxChars) + '\n[...truncated]';
     }
 
     return output;
