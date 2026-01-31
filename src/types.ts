@@ -15,6 +15,8 @@ export interface AgenticReporterOptions {
   maxLogChars?: number;
   /** Include attachment paths in output (default: true) */
   includeAttachments?: boolean;
+  /** Enable detailed report file generation (default: true) */
+  enableDetailedReport?: boolean;
   /** Custom output stream (default: process.stdout) */
   outputStream?: NodeJS.WritableStream;
 }
@@ -65,4 +67,6 @@ export interface FailureContext {
   title: string;
   /** Reproduce command */
   reproduceCommand: string;
+  /** Path to the detailed report file */
+  detailsPath?: string;
 }

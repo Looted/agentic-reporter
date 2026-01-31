@@ -84,6 +84,11 @@ export function buildMarkdownContext(context: FailureContext, options: ResolvedO
 
   lines.push(`**Hint:** ${context.hint}`);
 
+  if (context.detailsPath) {
+    lines.push('');
+    lines.push(`**Full Details:** ${context.detailsPath}`);
+  }
+
   return lines.join('\n');
 }
 
@@ -92,13 +97,16 @@ export function buildMarkdownContext(context: FailureContext, options: ResolvedO
  */
 export function formatFailure(context: FailureContext, options: ResolvedOptions): string {
   const markdown = buildMarkdownContext(context, options);
+  const detailsTag = context.detailsPath
+    ? `\n    <details_file>${escapeXml(context.detailsPath)}</details_file>`
+    : '';
 
   return `  <failure id="${context.failureId}" type="${context.errorType}" file="${escapeXml(context.fileName)}" line="${context.lineNumber}" duration="${context.duration}ms" retry="${context.retry}">
     <error_summary>${escapeXml(context.errorMessage)}</error_summary>
     <context_markdown><![CDATA[
 ${markdown}
     ]]></context_markdown>
-    <reproduce_command>${escapeXml(context.reproduceCommand)}</reproduce_command>
+    <reproduce_command>${escapeXml(context.reproduceCommand)}</reproduce_command>${detailsTag}
   </failure>`;
 }
 
