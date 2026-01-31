@@ -5,17 +5,26 @@
 
 import type { FailureContext, ResolvedOptions } from './types';
 
+const XML_CHAR_MAP: Record<string, string> = {
+  '<': '&lt;',
+  '>': '&gt;',
+  '&': '&amp;',
+  '"': '&quot;',
+  "'": '&apos;',
+};
+
+const XML_REGEX = /[<>&"']/g;
+const XML_TEST_REGEX = /[<>&"']/;
+
 /**
  * Escape special XML characters in a string.
  */
 export function escapeXml(str: string): string {
   if (!str) return '';
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
+  // Optimization: If no special characters are present, return the original string.
+  // This avoids the overhead of replace() and callback invocation for the common case.
+  if (!XML_TEST_REGEX.test(str)) return str;
+  return str.replace(XML_REGEX, (c) => XML_CHAR_MAP[c]);
 }
 
 /**
