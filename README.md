@@ -13,7 +13,7 @@ A high-density, token-efficient Playwright reporter designed for autonomous AI c
 ## Installation
 
 ```bash
-npm install @align/agentic-reporter
+npm install @looted/agentic-reporter
 ```
 
 ## Usage
@@ -24,7 +24,7 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   reporter: process.env['AGENTIC_REPORTER']
-    ? [['@align/agentic-reporter', { maxFailures: 5 }]]
+    ? [['@looted/agentic-reporter', { maxFailures: 5 }]]
     : [['html', { open: 'never' }]],
 });
 ```
