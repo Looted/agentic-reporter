@@ -64,6 +64,32 @@ describe('formatter', () => {
         // Usually stack includes "Error: foo" at the top.
         expect(cleaned.split('\n').length).toBeLessThanOrEqual(2);
     });
+
+    it('handles mixed newlines', () => {
+      const stack = 'Error: foo\r\n    at a (a.js:1:1)\n    at b (b.js:1:1)';
+      const cleaned = cleanStack(stack, 10);
+      expect(cleaned).toContain('at a');
+      expect(cleaned).toContain('at b');
+    });
+
+    it('stops early when maxFrames is reached', () => {
+      const stack = '1\n2\n3\n4\n5';
+      const cleaned = cleanStack(stack, 3);
+      expect(cleaned.split('\n').length).toBe(3);
+      expect(cleaned).toBe('1\n2\n3');
+    });
+
+    it('returns empty string if all lines are filtered', () => {
+      const stack = 'node_modules\ninternal/\nplaywright/lib';
+      const cleaned = cleanStack(stack, 10);
+      expect(cleaned).toBe('');
+    });
+
+    it('handles stack ending with newline', () => {
+      const stack = 'a\nb\n';
+      const cleaned = cleanStack(stack, 10);
+      expect(cleaned).toBe('a\nb');
+    });
   });
 
   describe('formatHeader', () => {
