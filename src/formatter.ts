@@ -34,19 +34,29 @@ export function sanitizeId(str: string): string {
 export function cleanStack(stack: string, maxFrames: number): string {
   if (!stack) return '';
 
-  return stack
-    .split('\n')
-    .filter((line) => {
-      const trimmed = line.trim();
-      if (!trimmed) return false;
-      // Remove internal Playwright/Node frames
-      if (trimmed.includes('node_modules')) return false;
-      if (trimmed.includes('playwright/lib')) return false;
-      if (trimmed.includes('internal/')) return false;
-      return true;
-    })
-    .slice(0, maxFrames)
-    .join('\n');
+  const lines: string[] = [];
+  let startIndex = 0;
+
+  while (lines.length < maxFrames && startIndex < stack.length) {
+    let endIndex = stack.indexOf('\n', startIndex);
+    if (endIndex === -1) {
+      endIndex = stack.length;
+    }
+
+    const line = stack.slice(startIndex, endIndex);
+    startIndex = endIndex + 1;
+
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    // Remove internal Playwright/Node frames
+    if (trimmed.includes('node_modules')) continue;
+    if (trimmed.includes('playwright/lib')) continue;
+    if (trimmed.includes('internal/')) continue;
+
+    lines.push(line);
+  }
+
+  return lines.join('\n');
 }
 
 /**
