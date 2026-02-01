@@ -17,6 +17,10 @@ export interface AgenticReporterOptions {
   includeAttachments?: boolean;
   /** Enable detailed report file generation (default: true) */
   enableDetailedReport?: boolean;
+  /** Check for previous failure reports on start and prompt to continue (default: false) */
+  checkPreviousReports?: boolean;
+  /** Immediately terminate execution when max failures is reached (default: false) */
+  exitOnExceedingMaxFailures?: boolean;
   /** Custom output stream (default: process.stdout) */
   outputStream?: NodeJS.WritableStream;
 }

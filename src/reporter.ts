@@ -53,6 +53,8 @@ const DEFAULTS: ResolvedOptions = {
   maxLogChars: 500,
   includeAttachments: true,
   enableDetailedReport: true,
+  checkPreviousReports: false,
+  exitOnExceedingMaxFailures: false,
   outputStream: process.stdout,
 };
 
@@ -67,6 +69,9 @@ function resolveOptions(options: AgenticReporterOptions = {}): ResolvedOptions {
     maxLogChars: options.maxLogChars ?? DEFAULTS.maxLogChars,
     includeAttachments: options.includeAttachments ?? DEFAULTS.includeAttachments,
     enableDetailedReport: options.enableDetailedReport ?? DEFAULTS.enableDetailedReport,
+    checkPreviousReports: options.checkPreviousReports ?? DEFAULTS.checkPreviousReports,
+    exitOnExceedingMaxFailures:
+      options.exitOnExceedingMaxFailures ?? DEFAULTS.exitOnExceedingMaxFailures,
     outputStream: options.outputStream ?? DEFAULTS.outputStream,
   };
 
@@ -108,6 +113,11 @@ class AgenticReporter implements Reporter {
       this.projectName = config.projects[0].name || 'chromium';
     }
 
+    // Check for previous failures if enabled
+    if (this.options.checkPreviousReports) {
+      this.checkForExistingReports();
+    }
+
     this.write(formatHeader(totalTests, workers, this.projectName));
   }
 
@@ -127,6 +137,7 @@ class AgenticReporter implements Reporter {
     // Silence on Success: emit nothing for passing/skipped tests
     if (result.status === 'passed') {
       this.passedCount++;
+      this.deleteFailureReport(test);
       return;
     }
 
@@ -141,6 +152,12 @@ class AgenticReporter implements Reporter {
     // Overflow Guard: stop emitting details if too many failures
     if (this.failureCount > this.options.maxFailures) {
       this.suppressedCount++;
+      if (this.options.exitOnExceedingMaxFailures) {
+        this.write(
+          `\n[AgenticReporter] Max failures (${this.options.maxFailures}) reached. Exiting immediately to save tokens.`
+        );
+        process.exit(1);
+      }
       return;
     }
 
@@ -276,6 +293,52 @@ class AgenticReporter implements Reporter {
   /** Write output to the configured stream */
   private write(content: string): void {
     this.options.outputStream.write(content + '\n');
+  }
+
+  /** Check for existing failure reports and prompt user */
+  private checkForExistingReports(): void {
+    if (!fs.existsSync(this.outputDir)) return;
+
+    const files = fs.readdirSync(this.outputDir);
+    const hasReports = files.some((f) => f.endsWith('-details.xml'));
+
+    if (hasReports) {
+      this.write(
+        '\n[AgenticReporter] WARNING: Previous failure reports detected in output directory.'
+      );
+      this.write('Proceeding with full regression might waste tokens if errors are not fixed.');
+      this.write('Fix failures first? (y/n) > ');
+
+      try {
+        const buffer = Buffer.alloc(1);
+        fs.readSync(0, buffer, 0, 1, null);
+        const response = buffer.toString('utf-8').toLowerCase().trim();
+
+        if (response !== 'y') {
+          this.write('Exiting...');
+          process.exit(1);
+        }
+      } catch (e) {
+        this.write(`\n[AgenticReporter] Failed to read input: ${e}. Proceeding...`);
+      }
+    }
+  }
+
+  /** Delete failure report for a passing test */
+  private deleteFailureReport(test: TestCase): void {
+    if (!this.options.enableDetailedReport) return;
+
+    const failureId = sanitizeId(test.titlePath().join('_'));
+    const fileName = `${failureId}-details.xml`;
+    const fullPath = path.join(this.outputDir, fileName);
+
+    if (fs.existsSync(fullPath)) {
+      try {
+        fs.unlinkSync(fullPath);
+      } catch {
+        // Ignore deletion errors
+      }
+    }
   }
 }
 
