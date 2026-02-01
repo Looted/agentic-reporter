@@ -111,6 +111,16 @@ class AgenticReporter implements Reporter {
     this.write(formatHeader(totalTests, workers, this.projectName));
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  onStdOut(chunk: string | Buffer, test?: TestCase, result?: TestResult): void {
+    // Swallow logs - they are captured in result.stdout and reported on failure
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  onStdErr(chunk: string | Buffer, test?: TestCase, result?: TestResult): void {
+    // Swallow logs - they are captured in result.stderr and reported on failure
+  }
+
   onTestEnd(test: TestCase, result: TestResult): void {
     this.totalDuration += result.duration;
 
