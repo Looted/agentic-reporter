@@ -8,10 +8,6 @@ on:
         required: false
         default: false
         type: boolean
-      otp:
-        description: 'One-time password from authenticator (required for publish)'
-        required: true  # Make it required when running
-        type: string
 
 jobs:
   publish:
@@ -31,7 +27,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-        # Don't set NODE_AUTH_TOKEN here to avoid consuming OTP
 
       - name: Run tests
         run: npm test
@@ -50,8 +45,6 @@ jobs:
 
       - name: Publish
         if: ${{ inputs.dry-run == false }}
-        run: |
-          echo "Publishing with OTP..."
-          npm publish --provenance --access public --otp="${{ inputs.otp }}"
+        run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
