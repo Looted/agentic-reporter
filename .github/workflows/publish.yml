@@ -46,9 +46,3 @@ jobs:
         run: npm publish --provenance --access public --otp=${{ inputs.otp }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish
-        if: ${{ inputs.dry-run == false }}
-        run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
