@@ -8,6 +8,10 @@ on:
         required: false
         default: false
         type: boolean
+      otp:
+        description: 'One-time password from authenticator (required for publish)'
+        required: false
+        type: string
 
 jobs:
   publish:
@@ -37,9 +41,9 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Publish (dry run)
-        if: ${{ inputs.dry-run == true }}
-        run: npm publish --dry-run --provenance --access public
+      - name: Publish
+        if: ${{ inputs.dry-run == false }}
+        run: npm publish --provenance --access public --otp=${{ inputs.otp }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
