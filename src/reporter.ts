@@ -47,6 +47,7 @@ import {
   cleanStack,
   sanitizeId,
 } from './formatter';
+import { getConsoleLogs } from './logProcessor';
 
 /** Default configuration values */
 const DEFAULTS: ResolvedOptions = {
@@ -250,31 +251,7 @@ class AgenticReporter implements Reporter {
 
   /** Extract console logs from test result */
   private getConsoleLogs(result: TestResult, maxLines: number, maxChars: number): string {
-    const allOutput: string[] = [];
-
-    // Process stdout (test code console.log)
-    for (const chunk of result.stdout) {
-      const text = typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
-      allOutput.push(...text.split('\n'));
-    }
-
-    // Process stderr (test code console.error)
-    for (const chunk of result.stderr) {
-      const text = typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
-      allOutput.push(...text.split('\n'));
-    }
-
-    // Filter empty lines and take last N
-    const filtered = allOutput.filter((line) => line.trim() !== '');
-    const lastLines = filtered.slice(-maxLines);
-
-    // Truncate if too long
-    let output = lastLines.join('\n');
-    if (output.length > maxChars) {
-      output = output.slice(0, maxChars) + '\n[...truncated]';
-    }
-
-    return output;
+    return getConsoleLogs(result, maxLines, maxChars);
   }
 
   /** Get attachment paths (traces, screenshots) */
