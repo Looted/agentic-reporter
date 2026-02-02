@@ -280,14 +280,25 @@ class AgenticReporter implements Reporter {
     if (!fs.existsSync(this.outputDir)) return;
 
     const files = fs.readdirSync(this.outputDir);
-    const hasReports = files.some((f) => f.endsWith('-details.xml'));
+    const reportFiles = files.filter((f) => f.endsWith('-details.xml'));
 
-    if (hasReports) {
-      this.write(
-        '\n[AgenticReporter] WARNING: Previous failure reports detected in output directory.'
-      );
-      this.write('Proceeding with full regression might waste tokens if errors are not fixed.');
-      this.write('Fix failures first? (y/n) > ');
+    if (reportFiles.length > 0) {
+      const failureList = reportFiles.map((f) => `    <failure>${f}</failure>`).join('\n');
+
+      this.write(`
+<agentic-prompt type="decision">
+  <title>Previous Failure Reports Detected</title>
+  <message>The following tests failed in the previous run:</message>
+  <failures>
+${failureList}
+  </failures>
+  <instruction>
+    Analyze the code and fix these errors before running the full suite.
+    Running tests without fixing errors wastes tokens.
+  </instruction>
+  <question>Do you want to ignore these failures and run the tests anyway? (y/n)</question>
+</agentic-prompt>
+> `);
 
       try {
         const buffer = Buffer.alloc(1);
