@@ -1,6 +1,6 @@
 {
   "name": "@looted/agentic-reporter",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "High-density Playwright reporter for AI coding agents",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -30,7 +30,7 @@
     "testing",
     "agentic"
   ],
-  "author": "",
+  "author": "Piotr Franczyk",
   "license": "MIT",
   "peerDependencies": {
     "@playwright/test": ">=1.40.0"
