@@ -307,7 +307,7 @@ class AgenticReporter implements Reporter {
         '\n[AgenticReporter] WARNING: Previous failure reports detected in output directory.'
       );
       this.write('Proceeding with full regression might waste tokens if errors are not fixed.');
-      this.write('Fix failures first? (y/n) > ');
+      this.write('Continue with regression? (y/n) > ');
 
       try {
         const buffer = Buffer.alloc(1);

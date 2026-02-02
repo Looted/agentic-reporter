@@ -29,6 +29,27 @@ export default defineConfig({
 });
 ```
 
+### Advanced AI Agent Configuration
+
+Enable strict token saving and safety checks:
+
+```typescript
+export default defineConfig({
+  reporter: [
+    [
+      '@looted/agentic-reporter',
+      {
+        maxFailures: 3,
+        // Stop execution immediately if failures > maxFailures
+        exitOnExceedingMaxFailures: true,
+        // Check for old failure reports and prompt before running regression
+        checkPreviousReports: true,
+      },
+    ],
+  ],
+});
+```
+
 ## Options
 
 | Option                       | Type           | Default | Description                                   |
