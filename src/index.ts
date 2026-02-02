@@ -10,6 +10,8 @@
 export { default as AgenticReporter } from './reporter';
 export { default } from './reporter';
 
+import type { AgenticReporterOptions } from './types';
+
 // Types
 export type {
   AgenticReporterOptions,
@@ -31,3 +33,12 @@ export {
   formatOverflowWarning,
   formatSummary,
 } from './formatter';
+
+/**
+ * Helper to configure the reporter with type safety
+ */
+export function agenticReporter(
+  options: AgenticReporterOptions = {}
+): ['@looted/agentic-reporter', AgenticReporterOptions] {
+  return ['@looted/agentic-reporter', options];
+}

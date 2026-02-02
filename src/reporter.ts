@@ -16,9 +16,12 @@
  * ```typescript
  * // playwright.config.ts
  * import { defineConfig } from '@playwright/test';
+ * import { agenticReporter } from '@looted/agentic-reporter';
  *
  * export default defineConfig({
- *   reporter: [['./libs/agentic-reporter/src/index.ts', { maxFailures: 5 }]],
+ *   reporter: [
+ *     agenticReporter({ maxFailures: 5 })
+ *   ],
  * });
  * ```
  */
