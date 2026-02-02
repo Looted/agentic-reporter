@@ -207,6 +207,44 @@ describe('AgenticReporter', () => {
     expect(fs.readdirSync).toHaveBeenCalled();
     expect(mockExit).not.toHaveBeenCalled();
   });
+
+  it('displays structured prompt with failure list', async () => {
+    reporter = new AgenticReporter({
+      outputStream,
+      checkPreviousReports: true
+    });
+    const config = {
+        workers: 1,
+        projects: [{ name: 'chromium' }],
+        outputDir: 'test-results-mock',
+      } as any;
+
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readdirSync).mockReturnValue([
+        'test-details.xml',
+        'my_test_spec_ts_fail-details.xml',
+        'other_file.txt'
+    ] as any);
+
+    // Mock user input 'n' to exit
+    vi.mocked(fs.readSync).mockImplementation((fd, buffer) => {
+      buffer.write('n');
+      return 1;
+    });
+
+    reporter.onBegin(config, { allTests: () => [] } as any);
+
+    const output = await streamToString(outputStream);
+
+    expect(output).toContain('<agentic-prompt type="decision">');
+    expect(output).toContain('<title>Previous Failure Reports Detected</title>');
+    expect(output).toContain('<failures>');
+    expect(output).toContain('test-details.xml');
+    expect(output).toContain('my_test_spec_ts_fail-details.xml');
+    expect(output).toContain('Do you want to ignore these failures and run the tests anyway? (y/n)');
+
+    expect(mockExit).toHaveBeenCalledWith(1);
+  });
 });
 
 function streamToString(stream: PassThrough): Promise<string> {
