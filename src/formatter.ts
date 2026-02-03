@@ -139,7 +139,7 @@ export function formatHeader(totalTests: number, workers: number, project: strin
  */
 export function formatOverflowWarning(maxFailures: number, suppressedCount: number): string {
   return `  <overflow_warning suppressed="${suppressedCount}">
-    Max failure limit (${maxFailures}) reached. ${suppressedCount} additional failures suppressed. Fix the above issues first.
+    Max failure limit (${maxFailures}) reached. Execution aborted. Fix the above issues first.
   </overflow_warning>`;
 }
 

@@ -114,11 +114,10 @@ describe('AgenticReporter', () => {
     expect(fs.writeFileSync).not.toHaveBeenCalled();
   });
 
-  it('exits immediately when max failures exceeded if option is enabled', () => {
+  it('exits immediately when max failures exceeded (default behavior)', () => {
     reporter = new AgenticReporter({
       outputStream,
       maxFailures: 1,
-      exitOnExceedingMaxFailures: true,
     });
     const config = { workers: 1, projects: [] } as any;
 
@@ -131,6 +130,40 @@ describe('AgenticReporter', () => {
     // Second failure - should trigger exit
     reporter.onTestEnd(mockTest as any, mockResult as any);
     expect(mockExit).toHaveBeenCalledWith(1);
+  });
+
+  it('does not exit by default (maxFailures is false/Infinity)', () => {
+    // Default options
+    reporter = new AgenticReporter({
+      outputStream,
+    });
+    const config = { workers: 1, projects: [] } as any;
+
+    reporter.onBegin(config, { allTests: () => [] } as any);
+
+    // 10 failures
+    for (let i = 0; i < 10; i++) {
+        reporter.onTestEnd(mockTest as any, mockResult as any);
+    }
+
+    expect(mockExit).not.toHaveBeenCalled();
+  });
+
+  it('does not exit if maxFailures is explicitly false', () => {
+    reporter = new AgenticReporter({
+      outputStream,
+      maxFailures: false,
+    });
+    const config = { workers: 1, projects: [] } as any;
+
+    reporter.onBegin(config, { allTests: () => [] } as any);
+
+    // 10 failures
+    for (let i = 0; i < 10; i++) {
+        reporter.onTestEnd(mockTest as any, mockResult as any);
+    }
+
+    expect(mockExit).not.toHaveBeenCalled();
   });
 
   it('deletes existing failure report when test passes', () => {
@@ -156,59 +189,7 @@ describe('AgenticReporter', () => {
     expect(fs.unlinkSync).toHaveBeenCalledWith(expectedPath);
   });
 
-  it('checks for previous reports and exits if user says no', () => {
-    reporter = new AgenticReporter({
-      outputStream,
-      checkPreviousReports: true
-    });
-    const config = {
-        workers: 1,
-        projects: [{ name: 'chromium' }],
-        outputDir: 'test-results-mock',
-      } as any;
-
-    vi.mocked(fs.existsSync).mockReturnValue(true);
-    vi.mocked(fs.readdirSync).mockReturnValue(['test-details.xml'] as any);
-
-    // Mock user input 'n'
-    vi.mocked(fs.readSync).mockImplementation((fd, buffer, offset, length) => {
-      buffer.write('n');
-      return 1;
-    });
-
-    reporter.onBegin(config, { allTests: () => [] } as any);
-
-    expect(fs.readdirSync).toHaveBeenCalled();
-    expect(mockExit).toHaveBeenCalledWith(1);
-  });
-
-  it('checks for previous reports and continues if user says yes', () => {
-    reporter = new AgenticReporter({
-      outputStream,
-      checkPreviousReports: true
-    });
-    const config = {
-        workers: 1,
-        projects: [{ name: 'chromium' }],
-        outputDir: 'test-results-mock',
-      } as any;
-
-    vi.mocked(fs.existsSync).mockReturnValue(true);
-    vi.mocked(fs.readdirSync).mockReturnValue(['test-details.xml'] as any);
-
-    // Mock user input 'y'
-    vi.mocked(fs.readSync).mockImplementation((fd, buffer, offset, length) => {
-      buffer.write('y');
-      return 1;
-    });
-
-    reporter.onBegin(config, { allTests: () => [] } as any);
-
-    expect(fs.readdirSync).toHaveBeenCalled();
-    expect(mockExit).not.toHaveBeenCalled();
-  });
-
-  it('displays structured prompt with failure list', async () => {
+  it('warns about previous reports but continues', async () => {
     reporter = new AgenticReporter({
       outputStream,
       checkPreviousReports: true
@@ -222,28 +203,18 @@ describe('AgenticReporter', () => {
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.readdirSync).mockReturnValue([
         'test-details.xml',
-        'my_test_spec_ts_fail-details.xml',
-        'other_file.txt'
     ] as any);
-
-    // Mock user input 'n' to exit
-    vi.mocked(fs.readSync).mockImplementation((fd, buffer) => {
-      buffer.write('n');
-      return 1;
-    });
 
     reporter.onBegin(config, { allTests: () => [] } as any);
 
     const output = await streamToString(outputStream);
 
-    expect(output).toContain('<agentic-prompt type="decision">');
-    expect(output).toContain('<title>Previous Failure Reports Detected</title>');
-    expect(output).toContain('<failures>');
+    expect(output).toContain('<agentic-warning type="previous_failures">');
     expect(output).toContain('test-details.xml');
-    expect(output).toContain('my_test_spec_ts_fail-details.xml');
-    expect(output).toContain('Do you want to ignore these failures and run the tests anyway? (y/n)');
 
-    expect(mockExit).toHaveBeenCalledWith(1);
+    // Should NOT exit and NOT ask for input
+    expect(mockExit).not.toHaveBeenCalled();
+    expect(fs.readSync).not.toHaveBeenCalled();
   });
 });
 

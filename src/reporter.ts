@@ -51,14 +51,13 @@ import { getConsoleLogs } from './logProcessor';
 
 /** Default configuration values */
 const DEFAULTS: ResolvedOptions = {
-  maxFailures: 5,
+  maxFailures: Infinity,
   maxStackFrames: 8,
   maxLogLines: 5,
   maxLogChars: 500,
   includeAttachments: true,
   enableDetailedReport: true,
   checkPreviousReports: false,
-  exitOnExceedingMaxFailures: false,
   outputStream: process.stdout,
 };
 
@@ -66,22 +65,30 @@ const DEFAULTS: ResolvedOptions = {
  * Validate and resolve options with defaults.
  */
 function resolveOptions(options: AgenticReporterOptions = {}): ResolvedOptions {
+  let maxFailures = options.maxFailures;
+  // If explicitly undefined, use default (which is now Infinity)
+  if (maxFailures === undefined) {
+    maxFailures = DEFAULTS.maxFailures;
+  }
+  // If explicitly false, use Infinity
+  if (maxFailures === false) {
+    maxFailures = Infinity;
+  }
+
   const resolved: ResolvedOptions = {
-    maxFailures: options.maxFailures ?? DEFAULTS.maxFailures,
+    maxFailures: maxFailures as number,
     maxStackFrames: options.maxStackFrames ?? DEFAULTS.maxStackFrames,
     maxLogLines: options.maxLogLines ?? DEFAULTS.maxLogLines,
     maxLogChars: options.maxLogChars ?? DEFAULTS.maxLogChars,
     includeAttachments: options.includeAttachments ?? DEFAULTS.includeAttachments,
     enableDetailedReport: options.enableDetailedReport ?? DEFAULTS.enableDetailedReport,
     checkPreviousReports: options.checkPreviousReports ?? DEFAULTS.checkPreviousReports,
-    exitOnExceedingMaxFailures:
-      options.exitOnExceedingMaxFailures ?? DEFAULTS.exitOnExceedingMaxFailures,
     outputStream: options.outputStream ?? DEFAULTS.outputStream,
   };
 
   // Runtime validation
-  if (resolved.maxFailures < 1) {
-    console.warn('[AgenticReporter] maxFailures must be >= 1, using default');
+  if (resolved.maxFailures < 1 && resolved.maxFailures !== Infinity) {
+    console.warn('[AgenticReporter] maxFailures must be >= 1 or false, using default');
     resolved.maxFailures = DEFAULTS.maxFailures;
   }
   if (resolved.maxStackFrames < 1) {
@@ -156,19 +163,22 @@ class AgenticReporter implements Reporter {
     // Overflow Guard: stop emitting details if too many failures
     if (this.failureCount > this.options.maxFailures) {
       this.suppressedCount++;
-      if (this.options.exitOnExceedingMaxFailures) {
-        this.write(
-          `\n[AgenticReporter] Max failures (${this.options.maxFailures}) reached. Exiting immediately to save tokens.`
-        );
-        process.exit(1);
-      }
-      return;
+      this.write(
+        `\n[AgenticReporter] Max failures (${this.options.maxFailures}) reached. Exiting immediately to save tokens.`
+      );
+      // Clean exit
+      this.printFooter('failed');
+      process.exit(1);
     }
 
     this.emitFailure(test, result);
   }
 
   onEnd(result: FullResult): void {
+    this.printFooter(result.status);
+  }
+
+  private printFooter(status: string): void {
     // Emit overflow warning if failures were suppressed
     if (this.suppressedCount > 0) {
       this.write(formatOverflowWarning(this.options.maxFailures, this.suppressedCount));
@@ -177,7 +187,7 @@ class AgenticReporter implements Reporter {
     // Emit summary
     this.write(
       formatSummary(
-        result.status,
+        status,
         this.passedCount,
         this.failureCount,
         this.skippedCount,
@@ -286,32 +296,16 @@ class AgenticReporter implements Reporter {
       const failureList = reportFiles.map((f) => `    <failure>${f}</failure>`).join('\n');
 
       this.write(`
-<agentic-prompt type="decision">
-  <title>Previous Failure Reports Detected</title>
+<agentic-warning type="previous_failures">
   <message>The following tests failed in the previous run:</message>
   <failures>
 ${failureList}
   </failures>
   <instruction>
     Analyze the code and fix these errors before running the full suite.
-    Running tests without fixing errors wastes tokens.
   </instruction>
-  <question>Do you want to ignore these failures and run the tests anyway? (y/n)</question>
-</agentic-prompt>
-> `);
-
-      try {
-        const buffer = Buffer.alloc(1);
-        fs.readSync(0, buffer, 0, 1, null);
-        const response = buffer.toString('utf-8').toLowerCase().trim();
-
-        if (response !== 'y') {
-          this.write('Exiting...');
-          process.exit(1);
-        }
-      } catch (e) {
-        this.write(`\n[AgenticReporter] Failed to read input: ${e}. Proceeding...`);
-      }
+</agentic-warning>
+`);
     }
   }
 
