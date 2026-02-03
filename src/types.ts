@@ -5,8 +5,8 @@
 
 /** Configuration options for the AgenticStream reporter */
 export interface AgenticReporterOptions {
-  /** Maximum failures to report before suppressing (default: 5) */
-  maxFailures?: number;
+  /** Maximum failures to report before suppressing and exiting (default: false). Set to a number to enable. */
+  maxFailures?: number | false;
   /** Maximum stack trace frames to include (default: 8) */
   maxStackFrames?: number;
   /** Maximum console log lines to include (default: 5) */
@@ -17,16 +17,17 @@ export interface AgenticReporterOptions {
   includeAttachments?: boolean;
   /** Enable detailed report file generation (default: true) */
   enableDetailedReport?: boolean;
-  /** Check for previous failure reports on start and prompt to continue (default: false) */
+  /** Check for previous failure reports on start and warn if found (default: false) */
   checkPreviousReports?: boolean;
-  /** Immediately terminate execution when max failures is reached (default: false) */
-  exitOnExceedingMaxFailures?: boolean;
   /** Custom output stream (default: process.stdout) */
   outputStream?: NodeJS.WritableStream;
 }
 
 /** Resolved options with all defaults applied */
-export type ResolvedOptions = Required<Omit<AgenticReporterOptions, 'outputStream'>> & {
+export type ResolvedOptions = Required<
+  Omit<AgenticReporterOptions, 'outputStream' | 'maxFailures'>
+> & {
+  maxFailures: number;
   outputStream: NodeJS.WritableStream;
 };
 
