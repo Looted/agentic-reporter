@@ -84,6 +84,7 @@ function resolveOptions(options: AgenticReporterOptions = {}): ResolvedOptions {
     enableDetailedReport: options.enableDetailedReport ?? DEFAULTS.enableDetailedReport,
     checkPreviousReports: options.checkPreviousReports ?? DEFAULTS.checkPreviousReports,
     outputStream: options.outputStream ?? DEFAULTS.outputStream,
+    getReproduceCommand: options.getReproduceCommand,
   };
 
   // Runtime validation
@@ -204,6 +205,18 @@ class AgenticReporter implements Reporter {
     const failureId = sanitizeId(test.titlePath().join('_'));
     let detailsPath: string | undefined;
 
+    // Correct project name resolution
+    const projectName = test.parent?.project()?.name || this.projectName;
+
+    const reproduceCommand = this.options.getReproduceCommand
+      ? this.options.getReproduceCommand({
+          file: test.location.file,
+          line: test.location.line,
+          project: projectName,
+          title: test.title,
+        })
+      : `npx playwright test ${test.location.file}:${test.location.line} --project=${projectName}`;
+
     // Generate detailed report if enabled
     if (this.options.enableDetailedReport) {
       const fullContext: FailureContext = {
@@ -219,7 +232,7 @@ class AgenticReporter implements Reporter {
         attachments: this.options.includeAttachments ? this.getAttachments(result) : '',
         hint,
         title: test.title,
-        reproduceCommand: `npx playwright test ${test.location.file}:${test.location.line} --project=${this.projectName}`,
+        reproduceCommand,
       };
 
       const fileContent = formatFailure(fullContext, {
@@ -252,7 +265,7 @@ class AgenticReporter implements Reporter {
       attachments: this.options.includeAttachments ? this.getAttachments(result) : '',
       hint,
       title: test.title,
-      reproduceCommand: `npx playwright test ${test.location.file}:${test.location.line} --project=${this.projectName}`,
+      reproduceCommand,
       detailsPath,
     };
 
