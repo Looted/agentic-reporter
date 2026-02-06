@@ -41,6 +41,9 @@ describe('AgenticReporter', () => {
     title: 'should fail',
     titlePath: () => ['tests', 'example.spec.ts', 'should fail'],
     location: { file: 'tests/example.spec.ts', line: 10 },
+    parent: {
+      project: () => ({ name: 'chromium' }),
+    },
   };
 
   const mockResult = {
@@ -215,6 +218,48 @@ describe('AgenticReporter', () => {
     // Should NOT exit and NOT ask for input
     expect(mockExit).not.toHaveBeenCalled();
     expect(fs.readSync).not.toHaveBeenCalled();
+  });
+
+  it('uses custom reproduce command if provided', async () => {
+    reporter = new AgenticReporter({
+      outputStream,
+      getReproduceCommand: (data) => `custom run ${data.file}:${data.line} --p=${data.project}`,
+    });
+    const config = {
+      workers: 1,
+      projects: [{ name: 'chromium' }],
+      outputDir: 'test-results-mock',
+    } as any;
+
+    reporter.onBegin(config, { allTests: () => [mockTest] } as any);
+    reporter.onTestEnd(mockTest as any, mockResult as any);
+
+    const output = await streamToString(outputStream);
+
+    expect(output).toContain('<reproduce_command>custom run tests/example.spec.ts:10 --p=chromium</reproduce_command>');
+  });
+
+  it('correctly resolves project name from test parent', async () => {
+    reporter = new AgenticReporter({ outputStream });
+    const config = {
+      workers: 1,
+      projects: [{ name: 'chromium' }, { name: 'firefox' }],
+      outputDir: 'test-results-mock',
+    } as any;
+
+    const firefoxTest = {
+      ...mockTest,
+      parent: {
+        project: () => ({ name: 'firefox' }),
+      },
+    };
+
+    reporter.onBegin(config, { allTests: () => [firefoxTest] } as any);
+    reporter.onTestEnd(firefoxTest as any, mockResult as any);
+
+    const output = await streamToString(outputStream);
+
+    expect(output).toContain('--project=firefox');
   });
 });
 

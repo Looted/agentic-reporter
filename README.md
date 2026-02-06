@@ -41,6 +41,26 @@ export default defineConfig({
 | `checkPreviousReports`       | boolean        | false   | Prompt to continue if previous failures exist |
 | `exitOnExceedingMaxFailures` | boolean        | false   | Stop execution when max failures reached      |
 | `outputStream`               | WritableStream | stdout  | Custom output stream                          |
+| `getReproduceCommand`        | function       | -       | Custom callback to generate reproduce command |
+
+### Custom Reproduce Command
+
+You can customize the reproduce command output by providing a callback function. This is useful for wrapping the Playwright command in a shell script or custom runner.
+
+```typescript
+import { defineConfig } from '@playwright/test';
+import { agenticReporter } from '@looted/agentic-reporter';
+
+export default defineConfig({
+  reporter: [
+    agenticReporter({
+      getReproduceCommand: ({ file, line, project }) => {
+        return `./run-e2e.sh ${file}:${line} --project=${project}`;
+      },
+    }),
+  ],
+});
+```
 
 ## Output Format
 

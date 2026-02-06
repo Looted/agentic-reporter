@@ -21,14 +21,25 @@ export interface AgenticReporterOptions {
   checkPreviousReports?: boolean;
   /** Custom output stream (default: process.stdout) */
   outputStream?: NodeJS.WritableStream;
+  /** Custom callback to generate reproduce command */
+  getReproduceCommand?: (data: ReproduceCommandData) => string;
+}
+
+/** Data passed to the getReproduceCommand callback */
+export interface ReproduceCommandData {
+  file: string;
+  line: number;
+  project: string;
+  title: string;
 }
 
 /** Resolved options with all defaults applied */
 export type ResolvedOptions = Required<
-  Omit<AgenticReporterOptions, 'outputStream' | 'maxFailures'>
+  Omit<AgenticReporterOptions, 'outputStream' | 'maxFailures' | 'getReproduceCommand'>
 > & {
   maxFailures: number;
   outputStream: NodeJS.WritableStream;
+  getReproduceCommand?: (data: ReproduceCommandData) => string;
 };
 
 /** Error type classification for debugging hints */
