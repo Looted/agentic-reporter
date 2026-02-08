@@ -5,7 +5,7 @@
 
 /** Configuration options for the AgenticStream reporter */
 export interface AgenticReporterOptions {
-  /** Maximum failures to report before suppressing and exiting (default: false). Set to a number to enable. */
+  /** Maximum failures before stopping execution (default: false). Set to a number to enable. */
   maxFailures?: number | false;
   /** Maximum stack trace frames to include (default: 8) */
   maxStackFrames?: number;

@@ -33,13 +33,12 @@ export default defineConfig({
 
 | Option                       | Type           | Default | Description                                   |
 | ---------------------------- | -------------- | ------- | --------------------------------------------- |
-| `maxFailures`                | number         | 5       | Max failures before suppression               |
+| `maxFailures`                | number/boolean | false   | Max failures before stopping execution        |
 | `maxStackFrames`             | number         | 8       | Stack trace depth                             |
 | `maxLogLines`                | number         | 5       | Console log lines                             |
 | `maxLogChars`                | number         | 500     | Max log characters                            |
 | `includeAttachments`         | boolean        | true    | Include trace/screenshot paths                |
 | `checkPreviousReports`       | boolean        | false   | Prompt to continue if previous failures exist |
-| `exitOnExceedingMaxFailures` | boolean        | false   | Stop execution when max failures reached      |
 | `outputStream`               | WritableStream | stdout  | Custom output stream                          |
 | `getReproduceCommand`        | function       | -       | Custom callback to generate reproduce command |
 
