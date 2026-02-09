@@ -46,8 +46,10 @@ import {
   formatSummary,
   cleanStack,
   sanitizeId,
+  escapeXml,
 } from './formatter';
 import { getConsoleLogs } from './logProcessor';
+import { generateAIStartHere } from './summaryGenerator';
 
 /** Default configuration values */
 const DEFAULTS: ResolvedOptions = {
@@ -55,6 +57,7 @@ const DEFAULTS: ResolvedOptions = {
   maxStackFrames: 8,
   maxLogLines: 5,
   maxLogChars: 500,
+  maxSlowTestThreshold: 5,
   includeAttachments: true,
   enableDetailedReport: true,
   checkPreviousReports: false,
@@ -80,6 +83,7 @@ function resolveOptions(options: AgenticReporterOptions = {}): ResolvedOptions {
     maxStackFrames: options.maxStackFrames ?? DEFAULTS.maxStackFrames,
     maxLogLines: options.maxLogLines ?? DEFAULTS.maxLogLines,
     maxLogChars: options.maxLogChars ?? DEFAULTS.maxLogChars,
+    maxSlowTestThreshold: options.maxSlowTestThreshold ?? DEFAULTS.maxSlowTestThreshold,
     includeAttachments: options.includeAttachments ?? DEFAULTS.includeAttachments,
     enableDetailedReport: options.enableDetailedReport ?? DEFAULTS.enableDetailedReport,
     checkPreviousReports: options.checkPreviousReports ?? DEFAULTS.checkPreviousReports,
@@ -109,6 +113,17 @@ class AgenticReporter implements Reporter {
   private projectName = 'chromium';
   private suppressedCount = 0;
   private outputDir = 'test-results';
+  private existingReports = new Set<string>();
+  private pendingDeletions: Promise<void>[] = [];
+
+  // Tracking for new features
+  private allTestDurations: number[] = [];
+  private slowTests: { test: TestCase; result: TestResult; duration: number; threshold: number }[] =
+    [];
+  private flakyTests: { test: TestCase; result: TestResult }[] = [];
+  private skippedTests: { test: TestCase }[] = [];
+  private failedTests: { test: TestCase; result: TestResult }[] = [];
+  private warnings: { test: TestCase; message: string }[] = [];
 
   constructor(options: AgenticReporterOptions = {}) {
     this.options = resolveOptions(options);
@@ -119,6 +134,20 @@ class AgenticReporter implements Reporter {
     const workers = config.workers;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     this.outputDir = (config as any).outputDir || 'test-results';
+
+    // Scan for existing reports to optimize deletions
+    if (fs.existsSync(this.outputDir)) {
+      try {
+        const files = fs.readdirSync(this.outputDir);
+        for (const file of files) {
+          if (file.endsWith('-details.xml')) {
+            this.existingReports.add(file);
+          }
+        }
+      } catch {
+        // Ignore directory read errors
+      }
+    }
 
     // Get project name from first project if available
     if (config.projects.length > 0) {
@@ -146,20 +175,46 @@ class AgenticReporter implements Reporter {
   onTestEnd(test: TestCase, result: TestResult): void {
     this.totalDuration += result.duration;
 
-    // Silence on Success: emit nothing for passing/skipped tests
+    // Track duration for all executed tests (excluding skipped)
+    if (result.status !== 'skipped') {
+      this.allTestDurations.push(result.duration);
+      this.completedTests.push({ test, result, duration: result.duration });
+    }
+
+    // Check for console warnings in stderr (even if passed)
+    if (result.stderr && result.stderr.length > 0) {
+      const stderrText = result.stderr.map((c) => c.toString()).join('\n');
+      if (stderrText.trim().length > 0) {
+        this.warnings.push({ test, message: stderrText });
+      }
+    }
+
     if (result.status === 'passed') {
       this.passedCount++;
-      this.deleteFailureReport(test);
+
+      // Check for Flaky
+      if (test.outcome() === 'flaky') {
+        this.flakyTests.push({ test, result });
+        // Do NOT delete failure report for flaky tests (preserve history)
+      } else {
+        // Clean pass
+        this.deleteFailureReport(test);
+      }
       return;
     }
 
     if (result.status === 'skipped') {
       this.skippedCount++;
+      this.skippedTests.push({ test });
+      this.write(
+        `  <skipped id="${sanitizeId(test.titlePath().join('_'))}" title="${escapeXml(test.title)}" />`
+      );
       return;
     }
 
     // Count as failure (includes 'failed', 'timedOut', 'interrupted')
     this.failureCount++;
+    this.failedTests.push({ test, result });
 
     // Overflow Guard: stop emitting details if too many failures
     if (this.failureCount > this.options.maxFailures) {
@@ -175,11 +230,26 @@ class AgenticReporter implements Reporter {
     this.emitFailure(test, result);
   }
 
-  onEnd(result: FullResult): void {
+  async onEnd(result: FullResult): Promise<void> {
+    await Promise.all(this.pendingDeletions);
     this.printFooter(result.status);
+
+    // Generate AI Start Here Summary
+    generateAIStartHere(
+      this.outputDir,
+      this.failedTests,
+      this.flakyTests,
+      this.slowTests,
+      this.skippedTests,
+      this.warnings,
+      this.options
+    );
   }
 
   private printFooter(status: string): void {
+    // Calculate slow tests here before printing
+    this.detectSlowTests();
+
     // Emit overflow warning if failures were suppressed
     if (this.suppressedCount > 0) {
       this.write(formatOverflowWarning(this.options.maxFailures, this.suppressedCount));
@@ -195,6 +265,62 @@ class AgenticReporter implements Reporter {
         this.totalDuration
       )
     );
+
+    // Emit Warnings
+    if (this.warnings.length > 0) {
+      this.write(`  <warnings>`);
+      for (const w of this.warnings) {
+        this.write(
+          `    <warning test="${escapeXml(w.test.title)}"><![CDATA[${w.message}]]></warning>`
+        );
+      }
+      this.write(`  </warnings>`);
+    }
+
+    // Emit Flaky Tests
+    if (this.flakyTests.length > 0) {
+      this.write(`  <flaky_tests>`);
+      for (const f of this.flakyTests) {
+        this.write(
+          `    <flaky id="${sanitizeId(f.test.titlePath().join('_'))}" title="${escapeXml(f.test.title)}" retry="${f.result.retry}" />`
+        );
+      }
+      this.write(`  </flaky_tests>`);
+    }
+
+    // Emit Slow Tests
+    if (this.slowTests.length > 0) {
+      this.write(`  <slow_tests threshold="${this.slowThreshold.toFixed(2)}ms">`);
+      for (const s of this.slowTests) {
+        this.write(
+          `    <slow id="${sanitizeId(s.test.titlePath().join('_'))}" title="${escapeXml(s.test.title)}" duration="${s.duration}ms" />`
+        );
+      }
+      this.write(`  </slow_tests>`);
+    }
+  }
+
+  private completedTests: { test: TestCase; duration: number; result: TestResult }[] = [];
+  private slowThreshold = 0;
+
+  private detectSlowTests(): void {
+    if (this.completedTests.length < 2) return;
+
+    const durations = this.completedTests.map((t) => t.duration);
+    const mean = durations.reduce((a, b) => a + b, 0) / durations.length;
+    const variance = durations.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / durations.length;
+    const stdDev = Math.sqrt(variance);
+
+    this.slowThreshold = mean + this.options.maxSlowTestThreshold * stdDev;
+
+    this.slowTests = this.completedTests
+      .filter((t) => t.duration > this.slowThreshold)
+      .map((t) => ({
+        test: t.test,
+        result: t.result,
+        duration: t.duration,
+        threshold: this.slowThreshold,
+      }));
   }
 
   /** Emit a single failure block with full context */
@@ -240,13 +366,16 @@ class AgenticReporter implements Reporter {
         maxLogLines: Infinity,
       });
 
-      const fileName = `${failureId}-details.xml`;
+      // Append retry index to filename to preserve history for flaky tests
+      const retrySuffix = result.retry > 0 ? `-retry${result.retry}` : '';
+      const fileName = `${failureId}${retrySuffix}-details.xml`;
       const fullPath = path.join(this.outputDir, fileName);
       detailsPath = fullPath;
 
       try {
         fs.mkdirSync(this.outputDir, { recursive: true });
         fs.writeFileSync(fullPath, fileContent);
+        this.existingReports.add(fileName);
       } catch (err) {
         console.warn(`[AgenticReporter] Failed to write detailed report to ${fullPath}:`, err);
       }
@@ -300,13 +429,10 @@ class AgenticReporter implements Reporter {
 
   /** Check for existing failure reports and prompt user */
   private checkForExistingReports(): void {
-    if (!fs.existsSync(this.outputDir)) return;
-
-    const files = fs.readdirSync(this.outputDir);
-    const reportFiles = files.filter((f) => f.endsWith('-details.xml'));
-
-    if (reportFiles.length > 0) {
-      const failureList = reportFiles.map((f) => `    <failure>${f}</failure>`).join('\n');
+    if (this.existingReports.size > 0) {
+      const failureList = Array.from(this.existingReports)
+        .map((f) => `    <failure>${f}</failure>`)
+        .join('\n');
 
       this.write(`
 <agentic-warning type="previous_failures">
@@ -327,15 +453,32 @@ ${failureList}
     if (!this.options.enableDetailedReport) return;
 
     const failureId = sanitizeId(test.titlePath().join('_'));
-    const fileName = `${failureId}-details.xml`;
-    const fullPath = path.join(this.outputDir, fileName);
 
-    if (fs.existsSync(fullPath)) {
-      try {
-        fs.unlinkSync(fullPath);
-      } catch {
-        // Ignore deletion errors
+    // Handle asynchronous deletion using the optimization from master branch
+    // but adapted to support retry files (flaky test support)
+
+    // We need to identify all files related to this test.
+    // The master branch optimized this by tracking existing files in a Set.
+    // My changes introduced multiple files per test (retries).
+
+    // Strategy: Iterate over the Set of existing files, find matches, delete them.
+
+    const prefix = `${failureId}`;
+    const filesToDelete: string[] = [];
+
+    for (const fileName of this.existingReports) {
+      if (fileName.startsWith(prefix)) {
+        const suffix = fileName.substring(failureId.length);
+        if (suffix === '-details.xml' || /^-retry\d+-details\.xml$/.test(suffix)) {
+          filesToDelete.push(fileName);
+        }
       }
+    }
+
+    for (const fileName of filesToDelete) {
+      this.existingReports.delete(fileName);
+      const fullPath = path.join(this.outputDir, fileName);
+      this.pendingDeletions.push(fs.promises.unlink(fullPath).catch(() => {}));
     }
   }
 }

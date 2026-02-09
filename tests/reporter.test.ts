@@ -15,6 +15,9 @@ vi.mock('fs', async () => {
     readSync: vi.fn(),
     existsSync: vi.fn(),
     unlinkSync: vi.fn(),
+    promises: {
+      unlink: vi.fn().mockResolvedValue(undefined),
+    },
   };
 });
 
@@ -169,16 +172,20 @@ describe('AgenticReporter', () => {
     expect(mockExit).not.toHaveBeenCalled();
   });
 
-  it('deletes existing failure report when test passes', () => {
+  it('deletes existing failure report when test passes', async () => {
     reporter = new AgenticReporter({ outputStream, enableDetailedReport: true });
     const config = {
-        workers: 1,
-        projects: [{ name: 'chromium' }],
-        outputDir: 'test-results-mock',
-      } as any;
+      workers: 1,
+      projects: [{ name: 'chromium' }],
+      outputDir: 'test-results-mock',
+    } as any;
 
-    // Mock file existence
+    const expectedFileName = 'tests_example_spec_ts_should_fail-details.xml';
+    const expectedPath = path.join('test-results-mock', expectedFileName);
+
+    // Mock file existence in readdirSync during onBegin
     vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readdirSync).mockReturnValue([expectedFileName] as any);
 
     reporter.onBegin(config, { allTests: () => [] } as any);
 
@@ -186,10 +193,9 @@ describe('AgenticReporter', () => {
     const passedResult = { ...mockResult, status: 'passed' };
     reporter.onTestEnd(mockTest as any, passedResult as any);
 
-    const expectedFileName = 'tests_example_spec_ts_should_fail-details.xml';
-    const expectedPath = path.join('test-results-mock', expectedFileName);
+    await reporter.onEnd({ status: 'passed' } as any);
 
-    expect(fs.unlinkSync).toHaveBeenCalledWith(expectedPath);
+    expect(fs.promises.unlink).toHaveBeenCalledWith(expectedPath);
   });
 
   it('warns about previous reports but continues', async () => {
