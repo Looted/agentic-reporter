@@ -109,6 +109,8 @@ class AgenticReporter implements Reporter {
   private projectName = 'chromium';
   private suppressedCount = 0;
   private outputDir = 'test-results';
+  private existingReports = new Set<string>();
+  private pendingDeletions: Promise<void>[] = [];
 
   constructor(options: AgenticReporterOptions = {}) {
     this.options = resolveOptions(options);
@@ -119,6 +121,20 @@ class AgenticReporter implements Reporter {
     const workers = config.workers;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     this.outputDir = (config as any).outputDir || 'test-results';
+
+    // Scan for existing reports to optimize deletions
+    if (fs.existsSync(this.outputDir)) {
+      try {
+        const files = fs.readdirSync(this.outputDir);
+        for (const file of files) {
+          if (file.endsWith('-details.xml')) {
+            this.existingReports.add(file);
+          }
+        }
+      } catch {
+        // Ignore directory read errors
+      }
+    }
 
     // Get project name from first project if available
     if (config.projects.length > 0) {
@@ -175,7 +191,8 @@ class AgenticReporter implements Reporter {
     this.emitFailure(test, result);
   }
 
-  onEnd(result: FullResult): void {
+  async onEnd(result: FullResult): Promise<void> {
+    await Promise.all(this.pendingDeletions);
     this.printFooter(result.status);
   }
 
@@ -247,6 +264,7 @@ class AgenticReporter implements Reporter {
       try {
         fs.mkdirSync(this.outputDir, { recursive: true });
         fs.writeFileSync(fullPath, fileContent);
+        this.existingReports.add(fileName);
       } catch (err) {
         console.warn(`[AgenticReporter] Failed to write detailed report to ${fullPath}:`, err);
       }
@@ -300,13 +318,10 @@ class AgenticReporter implements Reporter {
 
   /** Check for existing failure reports and prompt user */
   private checkForExistingReports(): void {
-    if (!fs.existsSync(this.outputDir)) return;
-
-    const files = fs.readdirSync(this.outputDir);
-    const reportFiles = files.filter((f) => f.endsWith('-details.xml'));
-
-    if (reportFiles.length > 0) {
-      const failureList = reportFiles.map((f) => `    <failure>${f}</failure>`).join('\n');
+    if (this.existingReports.size > 0) {
+      const failureList = Array.from(this.existingReports)
+        .map((f) => `    <failure>${f}</failure>`)
+        .join('\n');
 
       this.write(`
 <agentic-warning type="previous_failures">
@@ -330,12 +345,9 @@ ${failureList}
     const fileName = `${failureId}-details.xml`;
     const fullPath = path.join(this.outputDir, fileName);
 
-    if (fs.existsSync(fullPath)) {
-      try {
-        fs.unlinkSync(fullPath);
-      } catch {
-        // Ignore deletion errors
-      }
+    if (this.existingReports.has(fileName)) {
+      this.existingReports.delete(fileName);
+      this.pendingDeletions.push(fs.promises.unlink(fullPath).catch(() => {}));
     }
   }
 }
