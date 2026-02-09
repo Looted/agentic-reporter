@@ -46,8 +46,10 @@ import {
   formatSummary,
   cleanStack,
   sanitizeId,
+  escapeXml,
 } from './formatter';
 import { getConsoleLogs } from './logProcessor';
+import { generateAIStartHere } from './summaryGenerator';
 
 /** Default configuration values */
 const DEFAULTS: ResolvedOptions = {
@@ -55,6 +57,7 @@ const DEFAULTS: ResolvedOptions = {
   maxStackFrames: 8,
   maxLogLines: 5,
   maxLogChars: 500,
+  maxSlowTestThreshold: 5,
   includeAttachments: true,
   enableDetailedReport: true,
   checkPreviousReports: false,
@@ -80,6 +83,7 @@ function resolveOptions(options: AgenticReporterOptions = {}): ResolvedOptions {
     maxStackFrames: options.maxStackFrames ?? DEFAULTS.maxStackFrames,
     maxLogLines: options.maxLogLines ?? DEFAULTS.maxLogLines,
     maxLogChars: options.maxLogChars ?? DEFAULTS.maxLogChars,
+    maxSlowTestThreshold: options.maxSlowTestThreshold ?? DEFAULTS.maxSlowTestThreshold,
     includeAttachments: options.includeAttachments ?? DEFAULTS.includeAttachments,
     enableDetailedReport: options.enableDetailedReport ?? DEFAULTS.enableDetailedReport,
     checkPreviousReports: options.checkPreviousReports ?? DEFAULTS.checkPreviousReports,
@@ -109,6 +113,15 @@ class AgenticReporter implements Reporter {
   private projectName = 'chromium';
   private suppressedCount = 0;
   private outputDir = 'test-results';
+
+  // Tracking for new features
+  private allTestDurations: number[] = [];
+  private slowTests: { test: TestCase; result: TestResult; duration: number; threshold: number }[] =
+    [];
+  private flakyTests: { test: TestCase; result: TestResult }[] = [];
+  private skippedTests: { test: TestCase }[] = [];
+  private failedTests: { test: TestCase; result: TestResult }[] = [];
+  private warnings: { test: TestCase; message: string }[] = [];
 
   constructor(options: AgenticReporterOptions = {}) {
     this.options = resolveOptions(options);
@@ -146,20 +159,46 @@ class AgenticReporter implements Reporter {
   onTestEnd(test: TestCase, result: TestResult): void {
     this.totalDuration += result.duration;
 
-    // Silence on Success: emit nothing for passing/skipped tests
+    // Track duration for all executed tests (excluding skipped)
+    if (result.status !== 'skipped') {
+      this.allTestDurations.push(result.duration);
+      this.completedTests.push({ test, result, duration: result.duration });
+    }
+
+    // Check for console warnings in stderr (even if passed)
+    if (result.stderr && result.stderr.length > 0) {
+      const stderrText = result.stderr.map((c) => c.toString()).join('\n');
+      if (stderrText.trim().length > 0) {
+        this.warnings.push({ test, message: stderrText });
+      }
+    }
+
     if (result.status === 'passed') {
       this.passedCount++;
-      this.deleteFailureReport(test);
+
+      // Check for Flaky
+      if (test.outcome() === 'flaky') {
+        this.flakyTests.push({ test, result });
+        // Do NOT delete failure report for flaky tests (preserve history)
+      } else {
+        // Clean pass
+        this.deleteFailureReport(test);
+      }
       return;
     }
 
     if (result.status === 'skipped') {
       this.skippedCount++;
+      this.skippedTests.push({ test });
+      this.write(
+        `  <skipped id="${sanitizeId(test.titlePath().join('_'))}" title="${escapeXml(test.title)}" />`
+      );
       return;
     }
 
     // Count as failure (includes 'failed', 'timedOut', 'interrupted')
     this.failureCount++;
+    this.failedTests.push({ test, result });
 
     // Overflow Guard: stop emitting details if too many failures
     if (this.failureCount > this.options.maxFailures) {
@@ -177,9 +216,23 @@ class AgenticReporter implements Reporter {
 
   onEnd(result: FullResult): void {
     this.printFooter(result.status);
+
+    // Generate AI Start Here Summary
+    generateAIStartHere(
+      this.outputDir,
+      this.failedTests,
+      this.flakyTests,
+      this.slowTests,
+      this.skippedTests,
+      this.warnings,
+      this.options
+    );
   }
 
   private printFooter(status: string): void {
+    // Calculate slow tests here before printing
+    this.detectSlowTests();
+
     // Emit overflow warning if failures were suppressed
     if (this.suppressedCount > 0) {
       this.write(formatOverflowWarning(this.options.maxFailures, this.suppressedCount));
@@ -195,6 +248,62 @@ class AgenticReporter implements Reporter {
         this.totalDuration
       )
     );
+
+    // Emit Warnings
+    if (this.warnings.length > 0) {
+      this.write(`  <warnings>`);
+      for (const w of this.warnings) {
+        this.write(
+          `    <warning test="${escapeXml(w.test.title)}"><![CDATA[${w.message}]]></warning>`
+        );
+      }
+      this.write(`  </warnings>`);
+    }
+
+    // Emit Flaky Tests
+    if (this.flakyTests.length > 0) {
+      this.write(`  <flaky_tests>`);
+      for (const f of this.flakyTests) {
+        this.write(
+          `    <flaky id="${sanitizeId(f.test.titlePath().join('_'))}" title="${escapeXml(f.test.title)}" retry="${f.result.retry}" />`
+        );
+      }
+      this.write(`  </flaky_tests>`);
+    }
+
+    // Emit Slow Tests
+    if (this.slowTests.length > 0) {
+      this.write(`  <slow_tests threshold="${this.slowThreshold.toFixed(2)}ms">`);
+      for (const s of this.slowTests) {
+        this.write(
+          `    <slow id="${sanitizeId(s.test.titlePath().join('_'))}" title="${escapeXml(s.test.title)}" duration="${s.duration}ms" />`
+        );
+      }
+      this.write(`  </slow_tests>`);
+    }
+  }
+
+  private completedTests: { test: TestCase; duration: number; result: TestResult }[] = [];
+  private slowThreshold = 0;
+
+  private detectSlowTests(): void {
+    if (this.completedTests.length < 2) return;
+
+    const durations = this.completedTests.map((t) => t.duration);
+    const mean = durations.reduce((a, b) => a + b, 0) / durations.length;
+    const variance = durations.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / durations.length;
+    const stdDev = Math.sqrt(variance);
+
+    this.slowThreshold = mean + this.options.maxSlowTestThreshold * stdDev;
+
+    this.slowTests = this.completedTests
+      .filter((t) => t.duration > this.slowThreshold)
+      .map((t) => ({
+        test: t.test,
+        result: t.result,
+        duration: t.duration,
+        threshold: this.slowThreshold,
+      }));
   }
 
   /** Emit a single failure block with full context */
@@ -240,7 +349,9 @@ class AgenticReporter implements Reporter {
         maxLogLines: Infinity,
       });
 
-      const fileName = `${failureId}-details.xml`;
+      // Append retry index to filename to preserve history for flaky tests
+      const retrySuffix = result.retry > 0 ? `-retry${result.retry}` : '';
+      const fileName = `${failureId}${retrySuffix}-details.xml`;
       const fullPath = path.join(this.outputDir, fileName);
       detailsPath = fullPath;
 
@@ -327,15 +438,38 @@ ${failureList}
     if (!this.options.enableDetailedReport) return;
 
     const failureId = sanitizeId(test.titlePath().join('_'));
-    const fileName = `${failureId}-details.xml`;
-    const fullPath = path.join(this.outputDir, fileName);
+    // We now have potentially multiple files (retry0, retry1, etc.)
+    // We should clean up all of them if the test passed cleanly.
 
-    if (fs.existsSync(fullPath)) {
-      try {
-        fs.unlinkSync(fullPath);
-      } catch {
-        // Ignore deletion errors
+    // Pattern: failureId + (-retryN)? + -details.xml
+    // Simple approach: list files and delete matches
+    if (!fs.existsSync(this.outputDir)) return;
+
+    try {
+      const files = fs.readdirSync(this.outputDir);
+      const prefix = `${failureId}`;
+
+      for (const file of files) {
+        if (file.startsWith(prefix) && file.endsWith('-details.xml')) {
+          // Check if it belongs to this test ID (exact match on prefix part)
+          // failureId is "test_name_..."
+          // File is "test_name_...-details.xml" or "test_name_...-retry1-details.xml"
+          // Ensure we don't delete "test_name_other_..."
+          // We can check if file starts with failureId + '-' or failureId + '.xml' (not possible here)
+          // Actually sanitizeId replaces non-alphanumeric with _, so no dots.
+          // The suffix starts with -details.xml or -retry...
+          // Let's be careful.
+          // Best way: construct exact possible names? No, retries can be many.
+          // Regex match?
+          const suffix = file.substring(failureId.length);
+          // Suffix should look like "-details.xml" or "-retry1-details.xml"
+          if (suffix === '-details.xml' || /^-retry\d+-details\.xml$/.test(suffix)) {
+            fs.unlinkSync(path.join(this.outputDir, file));
+          }
+        }
       }
+    } catch {
+      // Ignore errors
     }
   }
 }

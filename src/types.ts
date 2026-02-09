@@ -13,6 +13,8 @@ export interface AgenticReporterOptions {
   maxLogLines?: number;
   /** Maximum characters for console logs (default: 500) */
   maxLogChars?: number;
+  /** Threshold (standard deviations) for slow test detection (default: 5) */
+  maxSlowTestThreshold?: number;
   /** Include attachment paths in output (default: true) */
   includeAttachments?: boolean;
   /** Enable detailed report file generation (default: true) */

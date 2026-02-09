@@ -8,6 +8,8 @@ A high-density, token-efficient Playwright reporter designed for autonomous AI c
 - **Token Efficiency**: "Silence on Success" - passing tests emit nothing
 - **High-Signal**: Captures stack traces, console logs, attachments
 - **Overflow Protection**: Truncates after N failures to prevent context exhaustion
+- **Smart Analysis**: Detects flaky tests, slow tests, and skipped tests
+- **AI Summary**: Generates a `test-results/ai-start-here.md` file with a high-level overview
 - **Extensible**: Custom hint patterns and output streams
 
 ## Installation
@@ -21,26 +23,43 @@ npm install @looted/agentic-reporter
 ```typescript
 // playwright.config.ts
 import { defineConfig } from '@playwright/test';
+import { agenticReporter } from '@looted/agentic-reporter';
 
 export default defineConfig({
-  reporter: process.env['AGENTIC_REPORTER']
-    ? [['@looted/agentic-reporter', { maxFailures: 5 }]]
-    : [['html', { open: 'never' }]],
+  reporter: [
+    agenticReporter({
+      maxFailures: 5,
+      maxSlowTestThreshold: 5, // 5 standard deviations
+      enableDetailedReport: true,
+    }),
+  ],
 });
 ```
 
 ## Options
 
-| Option                       | Type           | Default | Description                                   |
-| ---------------------------- | -------------- | ------- | --------------------------------------------- |
-| `maxFailures`                | number/boolean | false   | Max failures before stopping execution        |
-| `maxStackFrames`             | number         | 8       | Stack trace depth                             |
-| `maxLogLines`                | number         | 5       | Console log lines                             |
-| `maxLogChars`                | number         | 500     | Max log characters                            |
-| `includeAttachments`         | boolean        | true    | Include trace/screenshot paths                |
-| `checkPreviousReports`       | boolean        | false   | Prompt to continue if previous failures exist |
-| `outputStream`               | WritableStream | stdout  | Custom output stream                          |
-| `getReproduceCommand`        | function       | -       | Custom callback to generate reproduce command |
+| Option                       | Type           | Default | Description                                                |
+| ---------------------------- | -------------- | ------- | ---------------------------------------------------------- |
+| `maxFailures`                | number/boolean | false   | Max failures before stopping execution                     |
+| `maxStackFrames`             | number         | 8       | Stack trace depth                                          |
+| `maxLogLines`                | number         | 5       | Console log lines                                          |
+| `maxLogChars`                | number         | 500     | Max log characters                                         |
+| `maxSlowTestThreshold`       | number         | 5       | Threshold (standard deviations) for slow test detection    |
+| `includeAttachments`         | boolean        | true    | Include trace/screenshot paths                             |
+| `enableDetailedReport`       | boolean        | true    | Generate detailed XML/Log files for failures               |
+| `checkPreviousReports`       | boolean        | false   | Prompt to continue if previous failures exist              |
+| `outputStream`               | WritableStream | stdout  | Custom output stream                                       |
+| `getReproduceCommand`        | function       | -       | Custom callback to generate reproduce command              |
+
+### AI Start Here Summary
+
+The reporter automatically generates a `test-results/ai-start-here.md` file after each run. this file contains:
+
+- **Failures**: Direct links to detailed failure reports.
+- **Flaky Tests**: Tests that failed initially but passed on retry (with links to initial failure logs).
+- **Slow Tests**: Tests that are significantly slower than the average (configurable via `maxSlowTestThreshold`).
+- **Skipped Tests**: List of skipped tests.
+- **Console Warnings**: Warnings emitted by passing tests.
 
 ### Custom Reproduce Command
 
@@ -81,6 +100,7 @@ at tests/auth.spec.ts:24:20
 **Hint:** Selector missing/hidden? Check element visibility.
     ]]></context_markdown>
     <reproduce_command>npx playwright test auth.spec.ts:24 --project=chromium</reproduce_command>
+    <details_file>test-results/auth_login-details.xml</details_file>
   </failure>
 
   <result_summary status="failed" passed="43" failed="2" skipped="0" duration="14520ms" />
