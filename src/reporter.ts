@@ -105,6 +105,7 @@ class AgenticReporter implements Reporter {
   private failureCount = 0;
   private passedCount = 0;
   private skippedCount = 0;
+  private flakyCount = 0;
   private totalDuration = 0;
   private projectName = 'chromium';
   private suppressedCount = 0;
@@ -162,15 +163,32 @@ class AgenticReporter implements Reporter {
   onTestEnd(test: TestCase, result: TestResult): void {
     this.totalDuration += result.duration;
 
-    // Silence on Success: emit nothing for passing/skipped tests
-    if (result.status === 'passed') {
-      this.passedCount++;
-      this.deleteFailureReport(test);
+    if (result.status === 'skipped') {
+      this.skippedCount++;
       return;
     }
 
-    if (result.status === 'skipped') {
-      this.skippedCount++;
+    if (result.status === 'passed') {
+      if (result.retry === 0) {
+        this.passedCount++;
+        this.deleteFailureReport(test);
+      } else {
+        // Passed on retry -> Flaky
+        this.flakyCount++;
+        // We do NOT delete the failure report here because the user might want to see the previous failure details?
+        // Actually, the previous failure would have been suppressed, so there is no report to delete.
+        // Wait, if it failed on retry=0, did we write it?
+        // Logic below says we only emit failure if retry === retries.
+        // So for flaky tests, the previous attempts were suppressed.
+        // So there is nothing to delete.
+      }
+      return;
+    }
+
+    // Failure Case
+    // Only count/emit if this is the final attempt
+    if (result.retry < test.retries) {
+      // Intermediate failure - suppress
       return;
     }
 
@@ -209,6 +227,7 @@ class AgenticReporter implements Reporter {
         this.passedCount,
         this.failureCount,
         this.skippedCount,
+        this.flakyCount,
         this.totalDuration
       )
     );
