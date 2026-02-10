@@ -112,6 +112,7 @@ class AgenticReporter implements Reporter {
   private outputDir = 'test-results';
   private existingReports = new Set<string>();
   private pendingDeletions: Promise<void>[] = [];
+  private failedTestIdCounts = new Map<string, number>();
 
   constructor(options: AgenticReporterOptions = {}) {
     this.options = resolveOptions(options);
@@ -175,25 +176,31 @@ class AgenticReporter implements Reporter {
       } else {
         // Passed on retry -> Flaky
         this.flakyCount++;
-        // We do NOT delete the failure report here because the user might want to see the previous failure details?
-        // Actually, the previous failure would have been suppressed, so there is no report to delete.
-        // Wait, if it failed on retry=0, did we write it?
-        // Logic below says we only emit failure if retry === retries.
-        // So for flaky tests, the previous attempts were suppressed.
-        // So there is nothing to delete.
+        // If we previously counted this as a failure (due to incorrect suppression),
+        // we should correct the stats now that it has passed.
+        const failureId = sanitizeId(test.titlePath().join('_'));
+        const previousFailures = this.failedTestIdCounts.get(failureId) || 0;
+        if (previousFailures > 0) {
+          this.failureCount -= previousFailures;
+          this.failedTestIdCounts.delete(failureId);
+        }
       }
       return;
     }
 
     // Failure Case
     // Only count/emit if this is the final attempt
-    if (result.retry < test.retries) {
+    const retries = test.retries ?? 0;
+    if (result.retry < retries) {
       // Intermediate failure - suppress
       return;
     }
 
     // Count as failure (includes 'failed', 'timedOut', 'interrupted')
     this.failureCount++;
+    const failureId = sanitizeId(test.titlePath().join('_'));
+    const current = this.failedTestIdCounts.get(failureId) || 0;
+    this.failedTestIdCounts.set(failureId, current + 1);
 
     // Overflow Guard: stop emitting details if too many failures
     if (this.failureCount > this.options.maxFailures) {
