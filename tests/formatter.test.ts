@@ -34,8 +34,8 @@ describe('formatter', () => {
     });
 
     it('truncates long strings', () => {
-      const longString = 'a'.repeat(200);
-      expect(sanitizeId(longString).length).toBe(100);
+      const longString = 'a'.repeat(300);
+      expect(sanitizeId(longString).length).toBe(220);
     });
   });
 

@@ -1,6 +1,6 @@
 {
   "name": "@looted/agentic-reporter",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "High-density Playwright reporter for AI coding agents",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

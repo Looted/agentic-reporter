@@ -31,7 +31,7 @@ export function escapeXml(str: string): string {
  * Sanitize a string for use as an XML id attribute.
  */
 export function sanitizeId(str: string): string {
-  return str.replace(/[^a-zA-Z0-9-]+/g, '_').slice(0, 100);
+  return str.replace(/[^a-zA-Z0-9-]+/g, '_').slice(0, 220);
 }
 
 /**
