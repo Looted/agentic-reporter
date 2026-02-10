@@ -104,9 +104,10 @@ describe('formatter', () => {
 
   describe('formatSummary', () => {
     it('formats XML summary', () => {
-        const summary = formatSummary('passed', 10, 0, 0, 100);
+        const summary = formatSummary('passed', 10, 0, 0, 0, 100);
         expect(summary).toContain('<result_summary status="passed"');
         expect(summary).toContain('passed="10"');
+        expect(summary).toContain('flaky="0"');
         expect(summary).toContain('duration="100ms"');
         expect(summary).toContain('</test_run>');
     });

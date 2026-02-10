@@ -151,8 +151,9 @@ export function formatSummary(
   passed: number,
   failed: number,
   skipped: number,
+  flaky: number,
   duration: number
 ): string {
-  return `  <result_summary status="${status}" passed="${passed}" failed="${failed}" skipped="${skipped}" duration="${duration}ms" />
+  return `  <result_summary status="${status}" passed="${passed}" failed="${failed}" skipped="${skipped}" flaky="${flaky}" duration="${duration}ms" />
 </test_run>`;
 }
