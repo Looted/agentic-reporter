@@ -9,8 +9,13 @@ import type { TestResult } from '@playwright/test/reporter';
  * @returns The formatted log string, potentially truncated
  */
 export function getConsoleLogs(result: TestResult, maxLines: number, maxChars: number): string {
-  const buffer: string[] = [];
+  if (maxLines === 0) return '';
+
+  let buffer: string[] = [];
   const isInfinite = maxLines === Infinity;
+  // Amortized optimization: slice when buffer grows too large
+  // We use 2x maxLines as a reasonable trade-off between memory and CPU
+  const maxBuffer = maxLines * 2;
 
   const processChunk = (chunk: string | Buffer) => {
     const text = typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
@@ -20,8 +25,8 @@ export function getConsoleLogs(result: TestResult, maxLines: number, maxChars: n
       if (line.trim() !== '') {
         buffer.push(line);
         // Maintain sliding window if not infinite
-        if (!isInfinite && buffer.length > maxLines) {
-          buffer.shift();
+        if (!isInfinite && buffer.length > maxBuffer) {
+          buffer = buffer.slice(-maxLines);
         }
       }
     }
@@ -35,6 +40,11 @@ export function getConsoleLogs(result: TestResult, maxLines: number, maxChars: n
   // Process stderr (test code console.error)
   for (const chunk of result.stderr) {
     processChunk(chunk);
+  }
+
+  // Final trim to ensure we respect maxLines exactly
+  if (!isInfinite && buffer.length > maxLines) {
+    buffer = buffer.slice(-maxLines);
   }
 
   // Truncate if too long (maxChars)
