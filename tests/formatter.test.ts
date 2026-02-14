@@ -25,17 +25,20 @@ describe('formatter', () => {
   });
 
   describe('sanitizeId', () => {
-    it('replaces non-alphanumeric characters with underscore', () => {
-      expect(sanitizeId('foo bar:baz')).toBe('foo_bar_baz');
+    it('replaces non-alphanumeric characters with underscore and appends hash', () => {
+      const result = sanitizeId('foo bar:baz');
+      expect(result).toMatch(/^foo_bar_baz_[a-f0-9]{8}$/);
     });
 
-    it('collapses multiple underscores', () => {
-      expect(sanitizeId('foo  bar')).toBe('foo_bar');
+    it('collapses multiple underscores and appends hash', () => {
+      const result = sanitizeId('foo  bar');
+      expect(result).toMatch(/^foo_bar_[a-f0-9]{8}$/);
     });
 
     it('truncates long strings', () => {
       const longString = 'a'.repeat(300);
-      expect(sanitizeId(longString).length).toBe(220);
+      // 200 chars + '_' + 8 chars hash = 209
+      expect(sanitizeId(longString).length).toBe(209);
     });
   });
 
