@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import AgenticReporter from '../src/reporter';
+import { sanitizeId } from '../src/formatter';
 import * as fs from 'fs';
 import * as path from 'path';
 import { PassThrough } from 'stream';
@@ -74,7 +75,7 @@ describe('AgenticReporter', () => {
     reporter.onTestEnd(mockTest as any, mockResult as any);
 
     // Verify file write
-    const expectedFileName = 'tests_example_spec_ts_should_fail-details.xml';
+    const expectedFileName = `${sanitizeId(mockTest.titlePath().join('_'))}-details.xml`;
     const expectedPath = path.join('test-results-mock', expectedFileName);
 
     expect(fs.mkdirSync).toHaveBeenCalledWith('test-results-mock', { recursive: true });
@@ -99,7 +100,7 @@ describe('AgenticReporter', () => {
     reporter.onTestEnd(mockTest as any, mockResult as any);
 
     const output = await streamToString(outputStream);
-    const expectedFileName = 'tests_example_spec_ts_should_fail-details.xml';
+    const expectedFileName = `${sanitizeId(mockTest.titlePath().join('_'))}-details.xml`;
     const expectedPath = path.join('test-results-mock', expectedFileName);
 
     expect(output).toContain(`<details_file>${expectedPath}</details_file>`);
@@ -180,7 +181,7 @@ describe('AgenticReporter', () => {
       outputDir: 'test-results-mock',
     } as any;
 
-    const expectedFileName = 'tests_example_spec_ts_should_fail-details.xml';
+    const expectedFileName = `${sanitizeId(mockTest.titlePath().join('_'))}-details.xml`;
     const expectedPath = path.join('test-results-mock', expectedFileName);
 
     // Mock file existence in readdirSync during onBegin

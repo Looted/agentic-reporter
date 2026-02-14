@@ -3,6 +3,7 @@
  * Utilities for formatting test output in the XML-Markdown hybrid format.
  */
 
+import * as crypto from 'crypto';
 import type { FailureContext, ResolvedOptions } from './types';
 
 const XML_CHAR_MAP: Record<string, string> = {
@@ -31,7 +32,11 @@ export function escapeXml(str: string): string {
  * Sanitize a string for use as an XML id attribute.
  */
 export function sanitizeId(str: string): string {
-  return str.replace(/[^a-zA-Z0-9-]+/g, '_').slice(0, 220);
+  const hash = crypto.createHash('sha1').update(str).digest('hex').slice(0, 8);
+  const sanitized = str.replace(/[^a-zA-Z0-9-]+/g, '_');
+  // Truncate to 200 to leave room for hash (8 chars) + separator (1 char) = 9 chars.
+  // Total length <= 209 chars, well within 220 limit.
+  return `${sanitized.slice(0, 200)}_${hash}`;
 }
 
 /**
