@@ -111,7 +111,7 @@ class AgenticReporter implements Reporter {
   private suppressedCount = 0;
   private outputDir = 'test-results';
   private existingReports = new Set<string>();
-  private pendingDeletions: Promise<void>[] = [];
+  private pendingFileOps: Promise<void>[] = [];
   private failedTestIdCounts = new Map<string, number>();
 
   constructor(options: AgenticReporterOptions = {}) {
@@ -218,7 +218,7 @@ class AgenticReporter implements Reporter {
   }
 
   async onEnd(result: FullResult): Promise<void> {
-    await Promise.all(this.pendingDeletions);
+    await Promise.all(this.pendingFileOps);
     this.printFooter(result.status);
   }
 
@@ -293,13 +293,17 @@ class AgenticReporter implements Reporter {
       const fullPath = path.join(this.outputDir, fileName);
       detailsPath = fullPath;
 
-      try {
-        fs.mkdirSync(this.outputDir, { recursive: true });
-        fs.writeFileSync(fullPath, fileContent);
-        this.existingReports.add(fileName);
-      } catch (err) {
-        console.warn(`[AgenticReporter] Failed to write detailed report to ${fullPath}:`, err);
-      }
+      const writeOp = fs.promises
+        .mkdir(this.outputDir, { recursive: true })
+        .then(() => fs.promises.writeFile(fullPath, fileContent))
+        .then(() => {
+          this.existingReports.add(fileName);
+        })
+        .catch((err) => {
+          console.warn(`[AgenticReporter] Failed to write detailed report to ${fullPath}:`, err);
+        });
+
+      this.pendingFileOps.push(writeOp);
     }
 
     const context: FailureContext = {
@@ -381,7 +385,7 @@ ${failureList}
 
     if (this.existingReports.has(fileName)) {
       this.existingReports.delete(fileName);
-      this.pendingDeletions.push(fs.promises.unlink(fullPath).catch(() => {}));
+      this.pendingFileOps.push(fs.promises.unlink(fullPath).catch(() => {}));
     }
   }
 }

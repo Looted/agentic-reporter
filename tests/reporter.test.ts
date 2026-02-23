@@ -18,6 +18,8 @@ vi.mock('fs', async () => {
     unlinkSync: vi.fn(),
     promises: {
       unlink: vi.fn().mockResolvedValue(undefined),
+      mkdir: vi.fn().mockResolvedValue(undefined),
+      writeFile: vi.fn().mockResolvedValue(undefined),
     },
   };
 });
@@ -63,7 +65,7 @@ describe('AgenticReporter', () => {
     attachments: [],
   };
 
-  it('writes detailed report file on failure', () => {
+  it('writes detailed report file on failure', async () => {
     // Setup
     const config = {
       workers: 1,
@@ -73,16 +75,17 @@ describe('AgenticReporter', () => {
 
     reporter.onBegin(config, { allTests: () => [mockTest] } as any);
     reporter.onTestEnd(mockTest as any, mockResult as any);
+    await reporter.onEnd({ status: 'failed' } as any);
 
     // Verify file write
     const expectedFileName = `${sanitizeId(mockTest.titlePath().join('_'))}-details.xml`;
     const expectedPath = path.join('test-results-mock', expectedFileName);
 
-    expect(fs.mkdirSync).toHaveBeenCalledWith('test-results-mock', { recursive: true });
-    expect(fs.writeFileSync).toHaveBeenCalledWith(expectedPath, expect.stringContaining('<failure'));
+    expect(fs.promises.mkdir).toHaveBeenCalledWith('test-results-mock', { recursive: true });
+    expect(fs.promises.writeFile).toHaveBeenCalledWith(expectedPath, expect.stringContaining('<failure'));
 
     // Verify file content has full logs
-    const callArgs = vi.mocked(fs.writeFileSync).mock.calls[0];
+    const callArgs = vi.mocked(fs.promises.writeFile).mock.calls[0];
     const fileContent = callArgs[1] as string;
     expect(fileContent).toContain('console log 1');
     expect(fileContent).toContain('console log 2');
@@ -107,7 +110,7 @@ describe('AgenticReporter', () => {
     expect(output).toContain(`**Full Details:** ${expectedPath}`);
   });
 
-  it('does not write file if enableDetailedReport is false', () => {
+  it('does not write file if enableDetailedReport is false', async () => {
     reporter = new AgenticReporter({ outputStream, enableDetailedReport: false });
     const config = {
         workers: 1,
@@ -117,8 +120,9 @@ describe('AgenticReporter', () => {
 
     reporter.onBegin(config, { allTests: () => [mockTest] } as any);
     reporter.onTestEnd(mockTest as any, mockResult as any);
+    await reporter.onEnd({ status: 'failed' } as any);
 
-    expect(fs.writeFileSync).not.toHaveBeenCalled();
+    expect(fs.promises.writeFile).not.toHaveBeenCalled();
   });
 
   it('exits immediately when max failures exceeded (default behavior)', () => {
