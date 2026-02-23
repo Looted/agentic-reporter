@@ -55,3 +55,30 @@ export function getConsoleLogs(result: TestResult, maxLines: number, maxChars: n
 
   return output;
 }
+
+/**
+ * Truncate an existing log string based on line and character limits.
+ *
+ * @param logs The already extracted log string
+ * @param maxLines Maximum number of lines to keep (from the end)
+ * @param maxChars Maximum number of characters to return
+ * @returns The formatted log string, potentially truncated
+ */
+export function truncateLogs(logs: string, maxLines: number, maxChars: number): string {
+  if (maxLines === 0) return '';
+
+  let lines = logs.split('\n');
+  const isInfiniteLines = maxLines === Infinity;
+  const isInfiniteChars = maxChars === Infinity;
+
+  if (!isInfiniteLines && lines.length > maxLines) {
+    lines = lines.slice(-maxLines);
+  }
+
+  let output = lines.join('\n');
+  if (!isInfiniteChars && output.length > maxChars) {
+    output = output.slice(0, maxChars) + '\n[...truncated]';
+  }
+
+  return output;
+}
