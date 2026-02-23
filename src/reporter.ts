@@ -118,24 +118,25 @@ class AgenticReporter implements Reporter {
     this.options = resolveOptions(options);
   }
 
-  onBegin(config: FullConfig, suite: Suite): void {
+  async onBegin(config: FullConfig, suite: Suite): Promise<void> {
     const totalTests = suite.allTests().length;
     const workers = config.workers;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     this.outputDir = (config as any).outputDir || 'test-results';
 
     // Scan for existing reports to optimize deletions
-    if (fs.existsSync(this.outputDir)) {
-      try {
-        const files = fs.readdirSync(this.outputDir);
+    try {
+      const stats = await fs.promises.stat(this.outputDir).catch(() => null);
+      if (stats && stats.isDirectory()) {
+        const files = await fs.promises.readdir(this.outputDir);
         for (const file of files) {
           if (file.endsWith('-details.xml')) {
             this.existingReports.add(file);
           }
         }
-      } catch {
-        // Ignore directory read errors
       }
+    } catch {
+      // Ignore directory read errors
     }
 
     // Get project name from first project if available
