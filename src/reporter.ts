@@ -47,7 +47,7 @@ import {
   cleanStack,
   sanitizeId,
 } from './formatter';
-import { getConsoleLogs } from './logProcessor';
+import { getConsoleLogs, truncateLogs } from './logProcessor';
 
 /** Default configuration values */
 const DEFAULTS: ResolvedOptions = {
@@ -260,6 +260,11 @@ class AgenticReporter implements Reporter {
         })
       : `npx playwright test ${test.location.file}:${test.location.line} --project=${projectName}`;
 
+    // Optimization: Call getConsoleLogs only once if detailed report is enabled
+    const fullLogs = this.options.enableDetailedReport
+      ? this.getConsoleLogs(result, Infinity, Infinity)
+      : '';
+
     // Generate detailed report if enabled
     if (this.options.enableDetailedReport) {
       const fullContext: FailureContext = {
@@ -271,7 +276,7 @@ class AgenticReporter implements Reporter {
         retry: result.retry,
         errorMessage,
         stack: cleanStack(error?.stack ?? '', 1000), // High limit for detailed report
-        logs: this.getConsoleLogs(result, Infinity, Infinity),
+        logs: fullLogs,
         attachments: this.options.includeAttachments ? this.getAttachments(result) : '',
         hint,
         title: test.title,
@@ -305,7 +310,9 @@ class AgenticReporter implements Reporter {
       retry: result.retry,
       errorMessage,
       stack: cleanStack(error?.stack ?? '', this.options.maxStackFrames),
-      logs: this.getConsoleLogs(result, this.options.maxLogLines, this.options.maxLogChars),
+      logs: this.options.enableDetailedReport
+        ? truncateLogs(fullLogs, this.options.maxLogLines, this.options.maxLogChars)
+        : this.getConsoleLogs(result, this.options.maxLogLines, this.options.maxLogChars),
       attachments: this.options.includeAttachments ? this.getAttachments(result) : '',
       hint,
       title: test.title,
