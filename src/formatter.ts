@@ -3,7 +3,6 @@
  * Utilities for formatting test output in the XML-Markdown hybrid format.
  */
 
-import * as crypto from 'crypto';
 import type { FailureContext, ResolvedOptions } from './types';
 
 const XML_CHAR_MAP: Record<string, string> = {
@@ -29,10 +28,24 @@ export function escapeXml(str: string): string {
 }
 
 /**
+ * FNV-1a 32-bit hash implementation.
+ * Faster than crypto.createHash('sha1') for short strings and sufficient for collision avoidance.
+ */
+function fnv1a(str: string): string {
+  let hash = 0x811c9dc5; // 2166136261 (32-bit offset basis)
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193); // 16777619 (32-bit prime)
+  }
+  // Force unsigned 32-bit and format as 8-char hex
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+/**
  * Sanitize a string for use as an XML id attribute.
  */
 export function sanitizeId(str: string): string {
-  const hash = crypto.createHash('sha1').update(str).digest('hex').slice(0, 8);
+  const hash = fnv1a(str);
   const sanitized = str.replace(/[^a-zA-Z0-9-]+/g, '_');
   // Truncate to 200 to leave room for hash (8 chars) + separator (1 char) = 9 chars.
   // Total length <= 209 chars, well within 220 limit.
