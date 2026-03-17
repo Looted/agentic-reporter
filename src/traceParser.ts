@@ -5,8 +5,11 @@ import fs from 'fs';
  * Extracts the last HTML snapshot from a Playwright trace.zip file.
  * Returns the path to the extracted file, or undefined if not found.
  */
-export async function extractHtmlSnapshot(zipPath: string, outputPath: string): Promise<string | undefined> {
-  return new Promise((resolve, reject) => {
+export async function extractHtmlSnapshot(
+  zipPath: string,
+  outputPath: string
+): Promise<string | undefined> {
+  return new Promise((resolve, _reject) => {
     yauzl.open(zipPath, { lazyEntries: true }, (err, zipfile) => {
       if (err || !zipfile) {
         return resolve(undefined);
