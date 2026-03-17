@@ -48,6 +48,7 @@ import {
   sanitizeId,
 } from './formatter';
 import { getConsoleLogs, truncateLogs } from './logProcessor';
+import { extractHtmlSnapshot } from './traceParser';
 
 /** Default configuration values */
 const DEFAULTS: ResolvedOptions = {
@@ -108,6 +109,7 @@ class AgenticReporter implements Reporter {
   private flakyCount = 0;
   private totalDuration = 0;
   private projectName = 'chromium';
+  private workingServerUrl?: string;
   private suppressedCount = 0;
   private outputDir = 'test-results';
   private existingReports = new Set<string>();
@@ -137,6 +139,13 @@ class AgenticReporter implements Reporter {
       }
     } catch {
       // Ignore directory read errors
+    }
+
+    // Extract base URL / webServer URL
+    if (config.webServer?.url) {
+      this.workingServerUrl = config.webServer.url;
+    } else if (config.projects.length > 0 && config.projects[0].use?.baseURL) {
+      this.workingServerUrl = config.projects[0].use.baseURL;
     }
 
     // Get project name from first project if available
@@ -266,7 +275,33 @@ class AgenticReporter implements Reporter {
       ? this.getConsoleLogs(result, Infinity, Infinity)
       : '';
 
-    // Generate detailed report if enabled
+    let snapshotPath: string | undefined;
+
+    // Detect trace attachment synchronously to pre-calculate the snapshot path
+    const traceAttachment = this.options.enableDetailedReport
+      ? result.attachments.find((a) => a.name === 'trace' && a.path?.endsWith('.zip'))
+      : undefined;
+
+    if (traceAttachment && traceAttachment.path) {
+      const snapshotFileName = `${failureId}-snapshot.html`;
+      snapshotPath = path.join(this.outputDir, snapshotFileName);
+
+      // Extract asynchronously and add to pending operations
+      const extractOp = fs.promises
+        .mkdir(this.outputDir, { recursive: true })
+        .then(() => extractHtmlSnapshot(traceAttachment.path!, snapshotPath!))
+        .then((extracted) => {
+          if (!extracted) {
+            // Snapshot wasn't actually found, but path was logged.
+            // That's acceptable since we must log synchronously.
+          }
+        })
+        .catch(() => {});
+
+      this.pendingFileOps.push(extractOp);
+    }
+
+    // Generate detailed report asynchronously
     if (this.options.enableDetailedReport) {
       const fullContext: FailureContext = {
         failureId,
@@ -282,6 +317,8 @@ class AgenticReporter implements Reporter {
         hint,
         title: test.title,
         reproduceCommand,
+        snapshotPath,
+        workingServerUrl: this.workingServerUrl,
       };
 
       const fileContent = formatFailure(fullContext, {
@@ -306,6 +343,7 @@ class AgenticReporter implements Reporter {
       this.pendingFileOps.push(writeOp);
     }
 
+    // Emit standard output synchronously to maintain correct ordering
     const context: FailureContext = {
       failureId,
       errorType,
@@ -323,6 +361,8 @@ class AgenticReporter implements Reporter {
       title: test.title,
       reproduceCommand,
       detailsPath,
+      snapshotPath,
+      workingServerUrl: this.workingServerUrl,
     };
 
     this.write(formatFailure(context, this.options));

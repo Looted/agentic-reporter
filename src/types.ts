@@ -85,4 +85,8 @@ export interface FailureContext {
   reproduceCommand: string;
   /** Path to the detailed report file */
   detailsPath?: string;
+  /** Extracted HTML snapshot path */
+  snapshotPath?: string;
+  /** Working server URL from config */
+  workingServerUrl?: string;
 }

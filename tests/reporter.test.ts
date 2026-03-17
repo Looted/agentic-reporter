@@ -20,6 +20,8 @@ vi.mock('fs', async () => {
       unlink: vi.fn().mockResolvedValue(undefined),
       mkdir: vi.fn().mockResolvedValue(undefined),
       writeFile: vi.fn().mockResolvedValue(undefined),
+      stat: vi.fn().mockResolvedValue({ isDirectory: () => true }),
+      readdir: vi.fn().mockResolvedValue([]),
     },
   };
 });
@@ -102,12 +104,12 @@ describe('AgenticReporter', () => {
     reporter.onBegin(config, { allTests: () => [mockTest] } as any);
     reporter.onTestEnd(mockTest as any, mockResult as any);
 
-    const output = await streamToString(outputStream);
+    await new Promise(resolve => setTimeout(resolve, 0)); const output = await streamToString(outputStream);
     const expectedFileName = `${sanitizeId(mockTest.titlePath().join('_'))}-details.xml`;
     const expectedPath = path.join('test-results-mock', expectedFileName);
 
     expect(output).toContain(`<details_file>${expectedPath}</details_file>`);
-    expect(output).toContain(`**Full Details:** ${expectedPath}`);
+    expect(output).toContain(`**Full Details:** \`${expectedPath}\``);
   });
 
   it('does not write file if enableDetailedReport is false', async () => {
@@ -188,11 +190,11 @@ describe('AgenticReporter', () => {
     const expectedFileName = `${sanitizeId(mockTest.titlePath().join('_'))}-details.xml`;
     const expectedPath = path.join('test-results-mock', expectedFileName);
 
-    // Mock file existence in readdirSync during onBegin
-    vi.mocked(fs.existsSync).mockReturnValue(true);
-    vi.mocked(fs.readdirSync).mockReturnValue([expectedFileName] as any);
+    // Mock file existence in fs.promises.readdir during onBegin
+    vi.mocked(fs.promises.stat).mockResolvedValue({ isDirectory: () => true } as any);
+    vi.mocked(fs.promises.readdir).mockResolvedValue([expectedFileName] as any);
 
-    reporter.onBegin(config, { allTests: () => [] } as any);
+    await reporter.onBegin(config, { allTests: () => [] } as any);
 
     // Passing test
     const passedResult = { ...mockResult, status: 'passed' };
@@ -214,12 +216,12 @@ describe('AgenticReporter', () => {
         outputDir: 'test-results-mock',
       } as any;
 
-    vi.mocked(fs.existsSync).mockReturnValue(true);
-    vi.mocked(fs.readdirSync).mockReturnValue([
+    vi.mocked(fs.promises.stat).mockResolvedValue({ isDirectory: () => true } as any);
+    vi.mocked(fs.promises.readdir).mockResolvedValue([
         'test-details.xml',
     ] as any);
 
-    reporter.onBegin(config, { allTests: () => [] } as any);
+    await reporter.onBegin(config, { allTests: () => [] } as any);
 
     const output = await streamToString(outputStream);
 
@@ -245,7 +247,7 @@ describe('AgenticReporter', () => {
     reporter.onBegin(config, { allTests: () => [mockTest] } as any);
     reporter.onTestEnd(mockTest as any, mockResult as any);
 
-    const output = await streamToString(outputStream);
+    await new Promise(resolve => setTimeout(resolve, 0)); const output = await streamToString(outputStream);
 
     expect(output).toContain('<reproduce_command>custom run tests/example.spec.ts:10 --p=chromium</reproduce_command>');
   });
@@ -268,7 +270,7 @@ describe('AgenticReporter', () => {
     reporter.onBegin(config, { allTests: () => [firefoxTest] } as any);
     reporter.onTestEnd(firefoxTest as any, mockResult as any);
 
-    const output = await streamToString(outputStream);
+    await new Promise(resolve => setTimeout(resolve, 0)); const output = await streamToString(outputStream);
 
     expect(output).toContain('--project=firefox');
   });
