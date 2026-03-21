@@ -39,6 +39,7 @@ export default defineConfig({
 | `maxLogChars`                | number         | 500     | Max log characters                            |
 | `includeAttachments`         | boolean        | true    | Include trace/screenshot paths                |
 | `checkPreviousReports`       | boolean        | false   | Prompt to continue if previous failures exist |
+| `progressInterval`           | number/boolean | 60000   | Interval in ms to emit an XML progress update |
 | `outputStream`               | WritableStream | stdout  | Custom output stream                          |
 | `getReproduceCommand`        | function       | -       | Custom callback to generate reproduce command |
 
