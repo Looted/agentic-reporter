@@ -156,6 +156,20 @@ ${markdown}
 }
 
 /**
+ * Format a progress heartbeat block.
+ */
+export function formatProgress(
+  passed: number,
+  failed: number,
+  skipped: number,
+  flaky: number,
+  total: number,
+  elapsed: number
+): string {
+  return `  <agentic_progress passed="${passed}" failed="${failed}" skipped="${skipped}" flaky="${flaky}" total="${total}" elapsed="${elapsed}ms" />`;
+}
+
+/**
  * Format the test run header.
  */
 export function formatHeader(totalTests: number, workers: number, project: string): string {

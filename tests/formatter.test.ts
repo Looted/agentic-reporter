@@ -4,6 +4,7 @@ import {
   sanitizeId,
   cleanStack,
   formatHeader,
+  formatProgress,
   formatSummary,
 } from '../src/formatter';
 
@@ -102,6 +103,13 @@ describe('formatter', () => {
         expect(header).toContain('total="10"');
         expect(header).toContain('workers="4"');
         expect(header).toContain('project="my-project"');
+    });
+  });
+
+  describe('formatProgress', () => {
+    it('formats XML progress heartbeat', () => {
+      const progress = formatProgress(10, 2, 1, 0, 50, 15000);
+      expect(progress).toContain('<agentic_progress passed="10" failed="2" skipped="1" flaky="0" total="50" elapsed="15000ms" />');
     });
   });
 

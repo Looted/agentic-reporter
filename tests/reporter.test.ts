@@ -274,6 +274,53 @@ describe('AgenticReporter', () => {
 
     expect(output).toContain('--project=firefox');
   });
+
+  describe('Progress Heartbeat', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      // Ensure Date.now() starts at a known time
+      vi.setSystemTime(1000);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('emits progress periodically', async () => {
+      reporter = new AgenticReporter({
+        outputStream,
+        progressInterval: 5000,
+      });
+
+      const config = { workers: 1, projects: [] } as any;
+      await reporter.onBegin(config, { allTests: () => [1, 2, 3] } as any);
+
+      // Advance time by 5s to trigger interval
+      vi.advanceTimersByTime(5000);
+
+      // We use a small timeout to let the event loop process the write before streamToString captures it
+      await reporter.onEnd({ status: 'passed' } as any);
+
+      const output = await streamToString(outputStream);
+      expect(output).toContain('<agentic_progress passed="0" failed="0" skipped="0" flaky="0" total="3" elapsed="5000ms" />');
+    });
+
+    it('does not emit progress if interval is disabled', async () => {
+      reporter = new AgenticReporter({
+        outputStream,
+        progressInterval: false,
+      });
+
+      const config = { workers: 1, projects: [] } as any;
+      await reporter.onBegin(config, { allTests: () => [1, 2, 3] } as any);
+
+      vi.advanceTimersByTime(100000);
+      await reporter.onEnd({ status: 'passed' } as any);
+
+      const output = await streamToString(outputStream);
+      expect(output).not.toContain('<agentic_progress');
+    });
+  });
 });
 
 function streamToString(stream: PassThrough): Promise<string> {
