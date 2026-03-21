@@ -210,16 +210,17 @@ class AgenticReporter implements Reporter {
       return;
     }
 
+    const failureId = sanitizeId(test.titlePath().join('_'));
+
     if (result.status === 'passed') {
       if (result.retry === 0) {
         this.passedCount++;
-        this.deleteFailureReport(test);
+        this.deleteFailureReport(test, failureId);
       } else {
         // Passed on retry -> Flaky
         this.flakyCount++;
         // If we previously counted this as a failure (due to incorrect suppression),
         // we should correct the stats now that it has passed.
-        const failureId = sanitizeId(test.titlePath().join('_'));
         const previousFailures = this.failedTestIdCounts.get(failureId) || 0;
         if (previousFailures > 0) {
           this.failureCount -= previousFailures;
@@ -239,7 +240,6 @@ class AgenticReporter implements Reporter {
 
     // Count as failure (includes 'failed', 'timedOut', 'interrupted')
     this.failureCount++;
-    const failureId = sanitizeId(test.titlePath().join('_'));
     const current = this.failedTestIdCounts.get(failureId) || 0;
     this.failedTestIdCounts.set(failureId, current + 1);
 
@@ -254,7 +254,7 @@ class AgenticReporter implements Reporter {
       process.exit(1);
     }
 
-    this.emitFailure(test, result);
+    this.emitFailure(test, result, failureId);
   }
 
   async onEnd(result: FullResult): Promise<void> {
@@ -286,11 +286,10 @@ class AgenticReporter implements Reporter {
   }
 
   /** Emit a single failure block with full context */
-  private emitFailure(test: TestCase, result: TestResult): void {
+  private emitFailure(test: TestCase, result: TestResult, failureId: string): void {
     const error = result.error;
     const errorMessage = error?.message ?? 'Unknown error';
     const { type: errorType, hint } = classifyError(errorMessage);
-    const failureId = sanitizeId(test.titlePath().join('_'));
     let detailsPath: string | undefined;
 
     // Correct project name resolution
@@ -451,10 +450,9 @@ ${failureList}
   }
 
   /** Delete failure report for a passing test */
-  private deleteFailureReport(test: TestCase): void {
+  private deleteFailureReport(test: TestCase, failureId: string): void {
     if (!this.options.enableDetailedReport) return;
 
-    const failureId = sanitizeId(test.titlePath().join('_'));
     const fileName = `${failureId}-details.xml`;
     const fullPath = path.join(this.outputDir, fileName);
 
