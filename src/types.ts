@@ -37,7 +37,10 @@ export interface ReproduceCommandData {
 
 /** Resolved options with all defaults applied */
 export type ResolvedOptions = Required<
-  Omit<AgenticReporterOptions, 'outputStream' | 'maxFailures' | 'progressInterval' | 'getReproduceCommand'>
+  Omit<
+    AgenticReporterOptions,
+    'outputStream' | 'maxFailures' | 'progressInterval' | 'getReproduceCommand'
+  >
 > & {
   maxFailures: number;
   progressInterval: number | false;
