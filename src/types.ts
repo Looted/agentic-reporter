@@ -19,6 +19,8 @@ export interface AgenticReporterOptions {
   enableDetailedReport?: boolean;
   /** Check for previous failure reports on start and warn if found (default: false) */
   checkPreviousReports?: boolean;
+  /** Interval in milliseconds to emit an XML progress update, or false to disable (default: 60000) */
+  progressInterval?: number | false;
   /** Custom output stream (default: process.stdout) */
   outputStream?: NodeJS.WritableStream;
   /** Custom callback to generate reproduce command */
@@ -35,9 +37,10 @@ export interface ReproduceCommandData {
 
 /** Resolved options with all defaults applied */
 export type ResolvedOptions = Required<
-  Omit<AgenticReporterOptions, 'outputStream' | 'maxFailures' | 'getReproduceCommand'>
+  Omit<AgenticReporterOptions, 'outputStream' | 'maxFailures' | 'progressInterval' | 'getReproduceCommand'>
 > & {
   maxFailures: number;
+  progressInterval: number | false;
   outputStream: NodeJS.WritableStream;
   getReproduceCommand?: (data: ReproduceCommandData) => string;
 };

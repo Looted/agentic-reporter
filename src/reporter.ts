@@ -42,6 +42,7 @@ import { classifyError } from './hints';
 import {
   formatHeader,
   formatFailure,
+  formatProgress,
   formatOverflowWarning,
   formatSummary,
   cleanStack,
@@ -59,6 +60,7 @@ const DEFAULTS: ResolvedOptions = {
   includeAttachments: true,
   enableDetailedReport: true,
   checkPreviousReports: false,
+  progressInterval: 60000,
   outputStream: process.stdout,
 };
 
@@ -84,6 +86,7 @@ function resolveOptions(options: AgenticReporterOptions = {}): ResolvedOptions {
     includeAttachments: options.includeAttachments ?? DEFAULTS.includeAttachments,
     enableDetailedReport: options.enableDetailedReport ?? DEFAULTS.enableDetailedReport,
     checkPreviousReports: options.checkPreviousReports ?? DEFAULTS.checkPreviousReports,
+    progressInterval: options.progressInterval ?? DEFAULTS.progressInterval,
     outputStream: options.outputStream ?? DEFAULTS.outputStream,
     getReproduceCommand: options.getReproduceCommand,
   };
@@ -115,13 +118,17 @@ class AgenticReporter implements Reporter {
   private existingReports = new Set<string>();
   private pendingFileOps: Promise<void>[] = [];
   private failedTestIdCounts = new Map<string, number>();
+  private totalTestsCount = 0;
+  private startTime = 0;
+  private progressTimer?: NodeJS.Timeout;
 
   constructor(options: AgenticReporterOptions = {}) {
     this.options = resolveOptions(options);
   }
 
   async onBegin(config: FullConfig, suite: Suite): Promise<void> {
-    const totalTests = suite.allTests().length;
+    this.totalTestsCount = suite.allTests().length;
+    this.startTime = Date.now();
     const workers = config.workers;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     this.outputDir = (config as any).outputDir || 'test-results';
@@ -158,7 +165,31 @@ class AgenticReporter implements Reporter {
       this.checkForExistingReports();
     }
 
-    this.write(formatHeader(totalTests, workers, this.projectName));
+    this.write(formatHeader(this.totalTestsCount, workers, this.projectName));
+
+    if (this.options.progressInterval !== false && this.options.progressInterval > 0) {
+      this.progressTimer = setInterval(() => {
+        this.emitProgress();
+      }, this.options.progressInterval);
+      // Ensure timer doesn't keep process alive
+      if (this.progressTimer.unref) {
+        this.progressTimer.unref();
+      }
+    }
+  }
+
+  private emitProgress(): void {
+    const elapsed = Date.now() - this.startTime;
+    this.write(
+      formatProgress(
+        this.passedCount,
+        this.failureCount,
+        this.skippedCount,
+        this.flakyCount,
+        this.totalTestsCount,
+        elapsed
+      )
+    );
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -227,6 +258,10 @@ class AgenticReporter implements Reporter {
   }
 
   async onEnd(result: FullResult): Promise<void> {
+    if (this.progressTimer) {
+      clearInterval(this.progressTimer);
+      this.progressTimer = undefined;
+    }
     await Promise.all(this.pendingFileOps);
     this.printFooter(result.status);
   }
