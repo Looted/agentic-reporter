@@ -229,7 +229,12 @@ class AgenticReporter implements Reporter {
 
         // We want to report flaky tests as failures so AI knows what went wrong.
         // We find the most recent failed result for this test.
-        const failedResult = test.results.slice().reverse().find(r => r.status === 'failed' || r.status === 'timedOut' || r.status === 'interrupted');
+        const failedResult = test.results
+          .slice()
+          .reverse()
+          .find(
+            (r) => r.status === 'failed' || r.status === 'timedOut' || r.status === 'interrupted'
+          );
         if (failedResult) {
           this.emitFailure(test, failedResult, failureId);
         }
