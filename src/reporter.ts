@@ -226,6 +226,13 @@ class AgenticReporter implements Reporter {
           this.failureCount -= previousFailures;
           this.failedTestIdCounts.delete(failureId);
         }
+
+        // We want to report flaky tests as failures so AI knows what went wrong.
+        // We find the most recent failed result for this test.
+        const failedResult = test.results.slice().reverse().find(r => r.status === 'failed' || r.status === 'timedOut' || r.status === 'interrupted');
+        if (failedResult) {
+          this.emitFailure(test, failedResult, failureId);
+        }
       }
       return;
     }
@@ -453,13 +460,18 @@ ${failureList}
   private deleteFailureReport(test: TestCase, failureId: string): void {
     if (!this.options.enableDetailedReport) return;
 
-    const fileName = `${failureId}-details.xml`;
-    const fullPath = path.join(this.outputDir, fileName);
+    const detailsFileName = `${failureId}-details.xml`;
+    const detailsFullPath = path.join(this.outputDir, detailsFileName);
+    const snapshotFileName = `${failureId}-snapshot.html`;
+    const snapshotFullPath = path.join(this.outputDir, snapshotFileName);
 
-    if (this.existingReports.has(fileName)) {
-      this.existingReports.delete(fileName);
-      this.pendingFileOps.push(fs.promises.unlink(fullPath).catch(() => {}));
-    }
+    this.existingReports.delete(detailsFileName);
+
+    // We explicitly delete rather than checking existingReports
+    // because reports might be present from a completely different prior run
+    // without having been tracked, or from the same run before existingReports was synced.
+    this.pendingFileOps.push(fs.promises.unlink(detailsFullPath).catch(() => {}));
+    this.pendingFileOps.push(fs.promises.unlink(snapshotFullPath).catch(() => {}));
   }
 }
 

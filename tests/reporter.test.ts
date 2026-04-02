@@ -179,7 +179,7 @@ describe('AgenticReporter', () => {
     expect(mockExit).not.toHaveBeenCalled();
   });
 
-  it('deletes existing failure report when test passes', async () => {
+  it('deletes existing failure report and snapshot when test passes', async () => {
     reporter = new AgenticReporter({ outputStream, enableDetailedReport: true });
     const config = {
       workers: 1,
@@ -189,10 +189,12 @@ describe('AgenticReporter', () => {
 
     const expectedFileName = `${sanitizeId(mockTest.titlePath().join('_'))}-details.xml`;
     const expectedPath = path.join('test-results-mock', expectedFileName);
+    const expectedSnapshotName = `${sanitizeId(mockTest.titlePath().join('_'))}-snapshot.html`;
+    const expectedSnapshotPath = path.join('test-results-mock', expectedSnapshotName);
 
     // Mock file existence in fs.promises.readdir during onBegin
     vi.mocked(fs.promises.stat).mockResolvedValue({ isDirectory: () => true } as any);
-    vi.mocked(fs.promises.readdir).mockResolvedValue([expectedFileName] as any);
+    vi.mocked(fs.promises.readdir).mockResolvedValue([expectedFileName, expectedSnapshotName] as any);
 
     await reporter.onBegin(config, { allTests: () => [] } as any);
 
@@ -203,6 +205,35 @@ describe('AgenticReporter', () => {
     await reporter.onEnd({ status: 'passed' } as any);
 
     expect(fs.promises.unlink).toHaveBeenCalledWith(expectedPath);
+    expect(fs.promises.unlink).toHaveBeenCalledWith(expectedSnapshotPath);
+  });
+
+  it('reports flaky tests as failures and emits details', async () => {
+    reporter = new AgenticReporter({ outputStream, enableDetailedReport: true });
+    const config = {
+      workers: 1,
+      projects: [{ name: 'chromium' }],
+      outputDir: 'test-results-mock',
+    } as any;
+
+    await reporter.onBegin(config, { allTests: () => [mockTest] } as any);
+
+    const flakyTest = {
+      ...mockTest,
+      retries: 1,
+      results: [
+        { status: 'failed', error: { message: 'Failed on first try' }, attachments: [], stdout: [], stderr: [], duration: 100, retry: 0 },
+        { status: 'passed', attachments: [], stdout: [], stderr: [], duration: 100, retry: 1 }
+      ]
+    };
+
+    const passedResult = { status: 'passed', retry: 1 };
+    reporter.onTestEnd(flakyTest as any, passedResult as any);
+
+    await new Promise(resolve => setTimeout(resolve, 0)); const output = await streamToString(outputStream);
+
+    expect(output).toContain('<error_summary>Failed on first try</error_summary>');
+    expect(output).toContain('failure id=');
   });
 
   it('warns about previous reports but continues', async () => {
