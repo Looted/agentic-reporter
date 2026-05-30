@@ -37,7 +37,12 @@ import type {
 import * as path from 'path';
 import * as fs from 'fs';
 
-import type { AgenticReporterOptions, ResolvedOptions, FailureContext } from './types';
+import type {
+  AgenticReporterOptions,
+  ResolvedOptions,
+  FailureContext,
+  FailureSource,
+} from './types';
 import { classifyError } from './hints';
 import {
   formatHeader,
@@ -46,6 +51,7 @@ import {
   formatSummary,
   cleanStack,
   sanitizeId,
+  escapeXml,
 } from './formatter';
 import { getConsoleLogs } from './logProcessor';
 
@@ -58,6 +64,7 @@ const DEFAULTS: ResolvedOptions = {
   includeAttachments: true,
   enableDetailedReport: true,
   checkPreviousReports: false,
+  previousReportsPolicy: 'prompt',
   exitOnExceedingMaxFailures: false,
   outputStream: process.stdout,
 };
@@ -74,6 +81,7 @@ function resolveOptions(options: AgenticReporterOptions = {}): ResolvedOptions {
     includeAttachments: options.includeAttachments ?? DEFAULTS.includeAttachments,
     enableDetailedReport: options.enableDetailedReport ?? DEFAULTS.enableDetailedReport,
     checkPreviousReports: options.checkPreviousReports ?? DEFAULTS.checkPreviousReports,
+    previousReportsPolicy: options.previousReportsPolicy ?? DEFAULTS.previousReportsPolicy,
     exitOnExceedingMaxFailures:
       options.exitOnExceedingMaxFailures ?? DEFAULTS.exitOnExceedingMaxFailures,
     outputStream: options.outputStream ?? DEFAULTS.outputStream,
@@ -101,6 +109,10 @@ class AgenticReporter implements Reporter {
   private projectName = 'chromium';
   private suppressedCount = 0;
   private outputDir = 'test-results';
+  private readonly runId = `agentic-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  private readonly failedTestIds: string[] = [];
+  private totalTests = 0;
+  private workers = 0;
 
   constructor(options: AgenticReporterOptions = {}) {
     this.options = resolveOptions(options);
@@ -109,8 +121,9 @@ class AgenticReporter implements Reporter {
   onBegin(config: FullConfig, suite: Suite): void {
     const totalTests = suite.allTests().length;
     const workers = config.workers;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    this.outputDir = (config as any).outputDir || 'test-results';
+    this.totalTests = totalTests;
+    this.workers = workers;
+    this.outputDir = this.resolveOutputDir(config);
 
     // Get project name from first project if available
     if (config.projects.length > 0) {
@@ -120,6 +133,15 @@ class AgenticReporter implements Reporter {
     // Check for previous failures if enabled
     if (this.options.checkPreviousReports) {
       this.checkForExistingReports();
+    } else if (
+      this.options.enableDetailedReport &&
+      this.options.previousReportsPolicy !== 'ignore'
+    ) {
+      this.warnAboutStaleArtifacts();
+    }
+
+    if (this.options.enableDetailedReport) {
+      this.writeRunManifest('running');
     }
 
     this.write(formatHeader(totalTests, workers, this.projectName));
@@ -169,6 +191,10 @@ class AgenticReporter implements Reporter {
   }
 
   onEnd(result: FullResult): void {
+    if (this.options.enableDetailedReport) {
+      this.writeRunManifest(result.status);
+    }
+
     // Emit overflow warning if failures were suppressed
     if (this.suppressedCount > 0) {
       this.write(formatOverflowWarning(this.options.maxFailures, this.suppressedCount));
@@ -192,13 +218,23 @@ class AgenticReporter implements Reporter {
     const errorMessage = error?.message ?? 'Unknown error';
     const { type: errorType, hint } = classifyError(errorMessage);
     const failureId = sanitizeId(test.titlePath().join('_'));
+    const projectName = this.getProjectName(test);
+    const testId = this.getTestId(test, failureId);
+    const fullTitlePath = test.titlePath().join(' › ');
+    const failureSource = this.classifyFailureSource(errorMessage, error?.stack ?? '');
     let detailsPath: string | undefined;
+
+    this.failedTestIds.push(testId);
 
     // Generate detailed report if enabled
     if (this.options.enableDetailedReport) {
       const fullContext: FailureContext = {
         failureId,
         errorType,
+        projectName,
+        testId,
+        fullTitlePath,
+        failureSource,
         fileName: path.basename(test.location.file),
         lineNumber: test.location.line,
         duration: result.duration,
@@ -209,7 +245,7 @@ class AgenticReporter implements Reporter {
         attachments: this.options.includeAttachments ? this.getAttachments(result) : '',
         hint,
         title: test.title,
-        reproduceCommand: `npx playwright test ${test.location.file}:${test.location.line} --project=${this.projectName}`,
+        reproduceCommand: `npx playwright test ${test.location.file}:${test.location.line} --project=${projectName}`,
       };
 
       const fileContent = formatFailure(fullContext, {
@@ -232,6 +268,10 @@ class AgenticReporter implements Reporter {
     const context: FailureContext = {
       failureId,
       errorType,
+      projectName,
+      testId,
+      fullTitlePath,
+      failureSource,
       fileName: path.basename(test.location.file),
       lineNumber: test.location.line,
       duration: result.duration,
@@ -242,7 +282,7 @@ class AgenticReporter implements Reporter {
       attachments: this.options.includeAttachments ? this.getAttachments(result) : '',
       hint,
       title: test.title,
-      reproduceCommand: `npx playwright test ${test.location.file}:${test.location.line} --project=${this.projectName}`,
+      reproduceCommand: `npx playwright test ${test.location.file}:${test.location.line} --project=${projectName}`,
       detailsPath,
     };
 
@@ -264,10 +304,116 @@ class AgenticReporter implements Reporter {
     for (const attachment of result.attachments) {
       if (attachment.path) {
         const name = attachment.name || 'attachment';
-        lines.push(`- ${name}: \`${attachment.path}\``);
+        const type = this.classifyAttachment(name, attachment.path);
+        const exists = fs.existsSync(attachment.path) ? 'exists' : 'missing';
+        lines.push(`- ${name} (${type}, ${exists}): \`${attachment.path}\``);
       }
     }
     return lines.join('\n');
+  }
+
+  private classifyAttachment(name: string, attachmentPath: string): string {
+    const normalized = `${name} ${attachmentPath}`.toLowerCase();
+    if (normalized.includes('trace') || normalized.endsWith('.zip')) return 'trace';
+    if (
+      normalized.includes('screenshot') ||
+      normalized.endsWith('.png') ||
+      normalized.endsWith('.jpeg')
+    ) {
+      return 'screenshot';
+    }
+    if (normalized.includes('video') || normalized.endsWith('.webm')) return 'video';
+    if (normalized.includes('error-context')) return 'error-context';
+    if (normalized.includes('snapshot') || normalized.endsWith('.html')) return 'snapshot-html';
+    if (normalized.includes('console') || normalized.endsWith('.log')) return 'console-log';
+    return 'attachment';
+  }
+
+  private classifyFailureSource(errorMessage: string, stack: string): FailureSource {
+    const text = `${errorMessage}\n${stack}`.toLowerCase();
+    if (text.includes('beforeeach')) {
+      return { phase: 'setup', summary: 'beforeEach hook setup' };
+    }
+    if (text.includes('before hooks') || text.includes('fixture')) {
+      return { phase: 'setup', summary: 'setup hook' };
+    }
+    if (
+      text.includes('seed') ||
+      text.includes('duplicate annotations') ||
+      text.includes('test data')
+    ) {
+      return { phase: 'data_setup', summary: 'seed failure in test data setup' };
+    }
+    if (text.includes('expect(') || text.includes('to be') || text.includes('locator')) {
+      return { phase: 'assertion', summary: 'assertion failure' };
+    }
+    if (text.trim()) return { phase: 'runtime', summary: 'test runtime' };
+    return { phase: 'unknown', summary: 'unknown failure source' };
+  }
+
+  private getTestId(test: TestCase, fallback: string): string {
+    const candidate = (test as TestCase & { id?: string }).id;
+    return candidate && candidate.trim() ? candidate : fallback;
+  }
+
+  private getProjectName(test: TestCase): string {
+    const parentSuite = (test as TestCase & { parent?: Suite }).parent;
+    return parentSuite?.project()?.name || this.projectName;
+  }
+
+  private resolveOutputDir(config: FullConfig): string {
+    const configWithOutputDir = config as FullConfig & { outputDir?: string };
+    return configWithOutputDir.outputDir ?? config.projects[0]?.outputDir ?? 'test-results';
+  }
+
+  private writeRunManifest(status: string): void {
+    const manifestPath = path.join(this.outputDir, 'agentic-run-manifest.json');
+    const manifest = {
+      runId: this.runId,
+      status,
+      project: this.projectName,
+      totalTests: this.totalTests,
+      workers: this.workers,
+      passed: this.passedCount,
+      failed: this.failureCount,
+      skipped: this.skippedCount,
+      suppressed: this.suppressedCount,
+      durationMs: this.totalDuration,
+      failedTests: this.failedTestIds,
+      writtenAt: new Date().toISOString(),
+    };
+
+    try {
+      fs.mkdirSync(this.outputDir, { recursive: true });
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    } catch (err) {
+      console.warn(`[AgenticReporter] Failed to write run manifest to ${manifestPath}:`, err);
+    }
+  }
+
+  private warnAboutStaleArtifacts(): void {
+    if (!fs.existsSync(this.outputDir)) return;
+    const manifestPath = path.join(this.outputDir, 'agentic-run-manifest.json');
+    if (!fs.existsSync(manifestPath)) return;
+
+    try {
+      const reportFiles = fs
+        .readdirSync(this.outputDir)
+        .filter((file) => file.endsWith('-details.xml'));
+      if (reportFiles.length === 0) return;
+      const rawManifest = fs.readFileSync(manifestPath, 'utf-8');
+      const parsedManifest = JSON.parse(rawManifest) as { runId?: string };
+      const previousRunId = parsedManifest.runId ?? 'unknown';
+      this
+        .write(`<stale_artifact_warning previous_run_id="${escapeXml(previousRunId)}" stale_reports="${reportFiles.length}">
+  <message>Existing failure detail files may belong to a previous run. Compare with agentic-run-manifest.json before trusting mixed artifacts.</message>
+  <failures>
+${reportFiles.map((file) => `    <failure>${escapeXml(file)}</failure>`).join('\n')}
+  </failures>
+</stale_artifact_warning>`);
+    } catch (err) {
+      this.write(`[AgenticReporter] Failed to inspect stale artifacts: ${err}`);
+    }
   }
 
   /** Write output to the configured stream */
@@ -283,7 +429,38 @@ class AgenticReporter implements Reporter {
     const reportFiles = files.filter((f) => f.endsWith('-details.xml'));
 
     if (reportFiles.length > 0) {
-      const failureList = reportFiles.map((f) => `    <failure>${f}</failure>`).join('\n');
+      const failureList = reportFiles
+        .map((f) => `    <failure>${escapeXml(f)}</failure>`)
+        .join('\n');
+
+      if (this.options.previousReportsPolicy === 'ignore') return;
+
+      if (this.options.previousReportsPolicy === 'warn') {
+        this.write(`
+<agentic-prompt type="warning">
+  <title>Previous Failure Reports Detected</title>
+  <policy>warn</policy>
+  <message>The following tests failed in the previous run:</message>
+  <failures>
+${failureList}
+  </failures>
+</agentic-prompt>`);
+        return;
+      }
+
+      if (this.options.previousReportsPolicy === 'fail') {
+        this.write(`
+<agentic-prompt type="error">
+  <title>Previous Failure Reports Detected</title>
+  <policy>fail</policy>
+  <message>Previous failure reports exist. Refusing to continue.</message>
+  <failures>
+${failureList}
+  </failures>
+</agentic-prompt>`);
+        process.exit(1);
+        return;
+      }
 
       this.write(`
 <agentic-prompt type="decision">

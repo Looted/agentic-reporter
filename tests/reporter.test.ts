@@ -11,6 +11,7 @@ vi.mock('fs', async () => {
     ...actual,
     mkdirSync: vi.fn(),
     writeFileSync: vi.fn(),
+    readFileSync: vi.fn(),
     readdirSync: vi.fn(),
     readSync: vi.fn(),
     existsSync: vi.fn(),
@@ -72,22 +73,85 @@ describe('AgenticReporter', () => {
     const expectedPath = path.join('test-results-mock', expectedFileName);
 
     expect(fs.mkdirSync).toHaveBeenCalledWith('test-results-mock', { recursive: true });
-    expect(fs.writeFileSync).toHaveBeenCalledWith(expectedPath, expect.stringContaining('<failure'));
+    expect(fs.writeFileSync).toHaveBeenCalledWith(
+      expectedPath,
+      expect.stringContaining('<failure')
+    );
 
     // Verify file content has full logs
-    const callArgs = vi.mocked(fs.writeFileSync).mock.calls[0];
+    const callArgs = vi
+      .mocked(fs.writeFileSync)
+      .mock.calls.find(([filePath]) => filePath === expectedPath);
+    expect(callArgs).toBeDefined();
+    if (!callArgs) return;
     const fileContent = callArgs[1] as string;
     expect(fileContent).toContain('console log 1');
     expect(fileContent).toContain('console log 2');
     expect(fileContent).toContain('console error 1');
   });
 
+  it('writes a run manifest at begin and finalizes it at end', () => {
+    const config = createConfig();
+
+    reporter.onBegin(config, createSuite([mockTest]));
+    reporter.onEnd({ status: 'failed' } as unknown as Parameters<AgenticReporter['onEnd']>[0]);
+
+    const manifestPath = path.join('test-results-mock', 'agentic-run-manifest.json');
+    const manifestWrites = vi
+      .mocked(fs.writeFileSync)
+      .mock.calls.filter(([filePath]) => filePath === manifestPath)
+      .map(([, content]) => JSON.parse(String(content)) as Record<string, unknown>);
+
+    expect(manifestWrites).toHaveLength(2);
+    expect(manifestWrites[0]).toMatchObject({
+      project: 'chromium',
+      status: 'running',
+      totalTests: 1,
+      workers: 1,
+    });
+    expect(manifestWrites[0].runId).toEqual(expect.stringMatching(/^agentic-/));
+    expect(manifestWrites[1]).toMatchObject({
+      runId: manifestWrites[0].runId,
+      status: 'failed',
+      failed: 0,
+      passed: 0,
+      skipped: 0,
+    });
+  });
+
+  it('uses project outputDir and test-results fallback for manifests', () => {
+    reporter.onBegin(
+      {
+        workers: 1,
+        projects: [{ name: 'chromium', outputDir: 'project-results' }],
+      } as unknown as Parameters<AgenticReporter['onBegin']>[0],
+      createSuite([])
+    );
+
+    expect(fs.writeFileSync).toHaveBeenCalledWith(
+      path.join('project-results', 'agentic-run-manifest.json'),
+      expect.any(String)
+    );
+
+    vi.clearAllMocks();
+    reporter = new AgenticReporter({ outputStream, enableDetailedReport: true });
+    reporter.onBegin(
+      { workers: 1, projects: [] } as unknown as Parameters<AgenticReporter['onBegin']>[0],
+      createSuite([])
+    );
+
+    expect(fs.writeFileSync).toHaveBeenCalledWith(
+      path.join('test-results', 'agentic-run-manifest.json'),
+      expect.any(String)
+    );
+  });
+
   it('includes details file link in standard output', async () => {
     const config = {
-        workers: 1,
-        projects: [{ name: 'chromium' }],
-        outputDir: 'test-results-mock',
-      } as any;
+      workers: 1,
+      projects: [{ name: 'chromium' }],
+      outputDir: 'test-results-mock',
+    } as any;
 
     reporter.onBegin(config, { allTests: () => [mockTest] } as any);
     reporter.onTestEnd(mockTest as any, mockResult as any);
@@ -103,15 +167,18 @@ describe('AgenticReporter', () => {
   it('does not write file if enableDetailedReport is false', () => {
     reporter = new AgenticReporter({ outputStream, enableDetailedReport: false });
     const config = {
-        workers: 1,
-        projects: [{ name: 'chromium' }],
-        outputDir: 'test-results-mock',
-      } as any;
+      workers: 1,
+      projects: [{ name: 'chromium' }],
+      outputDir: 'test-results-mock',
+    } as any;
 
     reporter.onBegin(config, { allTests: () => [mockTest] } as any);
     reporter.onTestEnd(mockTest as any, mockResult as any);
 
-    expect(fs.writeFileSync).not.toHaveBeenCalled();
+    const detailWrites = vi
+      .mocked(fs.writeFileSync)
+      .mock.calls.filter(([filePath]) => String(filePath).endsWith('-details.xml'));
+    expect(detailWrites).toHaveLength(0);
   });
 
   it('exits immediately when max failures exceeded if option is enabled', () => {
@@ -136,10 +203,10 @@ describe('AgenticReporter', () => {
   it('deletes existing failure report when test passes', () => {
     reporter = new AgenticReporter({ outputStream, enableDetailedReport: true });
     const config = {
-        workers: 1,
-        projects: [{ name: 'chromium' }],
-        outputDir: 'test-results-mock',
-      } as any;
+      workers: 1,
+      projects: [{ name: 'chromium' }],
+      outputDir: 'test-results-mock',
+    } as any;
 
     // Mock file existence
     vi.mocked(fs.existsSync).mockReturnValue(true);
@@ -159,13 +226,13 @@ describe('AgenticReporter', () => {
   it('checks for previous reports and exits if user says no', () => {
     reporter = new AgenticReporter({
       outputStream,
-      checkPreviousReports: true
+      checkPreviousReports: true,
     });
     const config = {
-        workers: 1,
-        projects: [{ name: 'chromium' }],
-        outputDir: 'test-results-mock',
-      } as any;
+      workers: 1,
+      projects: [{ name: 'chromium' }],
+      outputDir: 'test-results-mock',
+    } as any;
 
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.readdirSync).mockReturnValue(['test-details.xml'] as any);
@@ -182,13 +249,13 @@ describe('AgenticReporter', () => {
   it('checks for previous reports and continues if user says yes', () => {
     reporter = new AgenticReporter({
       outputStream,
-      checkPreviousReports: true
+      checkPreviousReports: true,
     });
     const config = {
-        workers: 1,
-        projects: [{ name: 'chromium' }],
-        outputDir: 'test-results-mock',
-      } as any;
+      workers: 1,
+      projects: [{ name: 'chromium' }],
+      outputDir: 'test-results-mock',
+    } as any;
 
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.readdirSync).mockReturnValue(['test-details.xml'] as any);
@@ -205,19 +272,20 @@ describe('AgenticReporter', () => {
   it('displays structured prompt with failure list', async () => {
     reporter = new AgenticReporter({
       outputStream,
-      checkPreviousReports: true
+      checkPreviousReports: true,
     });
     const config = {
-        workers: 1,
-        projects: [{ name: 'chromium' }],
-        outputDir: 'test-results-mock',
-      } as any;
+      workers: 1,
+      projects: [{ name: 'chromium' }],
+      outputDir: 'test-results-mock',
+    } as any;
 
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.readdirSync).mockReturnValue([
-        'test-details.xml',
-        'my_test_spec_ts_fail-details.xml',
-        'other_file.txt'
+      'test-details.xml',
+      'my_test_spec_ts_fail-details.xml',
+      'special&test-details.xml',
+      'other_file.txt',
     ] as any);
 
     // Mock user input 'n' to exit
@@ -232,7 +300,10 @@ describe('AgenticReporter', () => {
     expect(output).toContain('<failures>');
     expect(output).toContain('test-details.xml');
     expect(output).toContain('my_test_spec_ts_fail-details.xml');
-    expect(output).toContain('Do you want to ignore these failures and run the tests anyway? (y/n)');
+    expect(output).toContain('special&amp;test-details.xml');
+    expect(output).toContain(
+      'Do you want to ignore these failures and run the tests anyway? (y/n)'
+    );
 
     expect(mockExit).toHaveBeenCalledWith(1);
   });
@@ -256,6 +327,7 @@ describe('AgenticReporter', () => {
     );
 
     warnSpy.mockRestore();
+    vi.mocked(fs.writeFileSync).mockReset();
   });
 
   it('uses process stdout as the default output stream option', () => {
@@ -265,8 +337,16 @@ describe('AgenticReporter', () => {
   });
 
   it('uses chromium fallback when first project has no name', async () => {
-    reporter.onBegin({ ...createConfig(), projects: [{ name: '' }] } as unknown as Parameters<AgenticReporter['onBegin']>[0], createSuite([mockTest]));
-    reporter.onTestEnd(mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0], mockResult as unknown as Parameters<AgenticReporter['onTestEnd']>[1]);
+    reporter.onBegin(
+      { ...createConfig(), projects: [{ name: '' }] } as unknown as Parameters<
+        AgenticReporter['onBegin']
+      >[0],
+      createSuite([mockTest])
+    );
+    reporter.onTestEnd(
+      mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0],
+      mockResult as unknown as Parameters<AgenticReporter['onTestEnd']>[1]
+    );
 
     const output = await streamToString(outputStream);
 
@@ -299,8 +379,14 @@ describe('AgenticReporter', () => {
   it('emits overflow warning in final summary when failures were suppressed', async () => {
     reporter = new AgenticReporter({ outputStream, maxFailures: 1 });
     reporter.onBegin(createConfig(), createSuite([mockTest]));
-    reporter.onTestEnd(mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0], mockResult as unknown as Parameters<AgenticReporter['onTestEnd']>[1]);
-    reporter.onTestEnd(mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0], mockResult as unknown as Parameters<AgenticReporter['onTestEnd']>[1]);
+    reporter.onTestEnd(
+      mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0],
+      mockResult as unknown as Parameters<AgenticReporter['onTestEnd']>[1]
+    );
+    reporter.onTestEnd(
+      mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0],
+      mockResult as unknown as Parameters<AgenticReporter['onTestEnd']>[1]
+    );
     reporter.onEnd({ status: 'failed' } as unknown as Parameters<AgenticReporter['onEnd']>[0]);
 
     const output = await streamToString(outputStream);
@@ -322,7 +408,11 @@ describe('AgenticReporter', () => {
     expect(output).toContain('type="unknown"');
   });
 
-  it('includes attachment paths with default names and skips attachments without paths', async () => {
+  it('classifies attachment paths and reports whether each path exists', async () => {
+    vi.mocked(fs.existsSync).mockImplementation((targetPath) =>
+      String(targetPath).endsWith('trace.zip')
+    );
+
     reporter.onBegin(createConfig(), createSuite([mockTest]));
     reporter.onTestEnd(
       mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0],
@@ -331,6 +421,7 @@ describe('AgenticReporter', () => {
         attachments: [
           { name: 'trace', path: 'trace.zip' },
           { path: 'screenshot.png' },
+          { name: 'error-context', path: 'error-context.md' },
           { name: 'body-only' },
         ],
       } as unknown as Parameters<AgenticReporter['onTestEnd']>[1]
@@ -338,9 +429,137 @@ describe('AgenticReporter', () => {
 
     const output = await streamToString(outputStream);
 
-    expect(output).toContain('- trace: `trace.zip`');
-    expect(output).toContain('- attachment: `screenshot.png`');
+    expect(output).toContain('- trace (trace, exists): `trace.zip`');
+    expect(output).toContain('- attachment (screenshot, missing): `screenshot.png`');
+    expect(output).toContain('- error-context (error-context, missing): `error-context.md`');
     expect(output).not.toContain('body-only');
+  });
+
+  it('classifies video snapshot console and generic attachments', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    reporter.onBegin(createConfig(), createSuite([mockTest]));
+    reporter.onTestEnd(
+      mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0],
+      {
+        ...mockResult,
+        attachments: [
+          { name: 'video', path: 'video.webm' },
+          { name: 'snapshot', path: 'snapshot.html' },
+          { name: 'console', path: 'failure.console.log' },
+          { name: 'custom', path: 'artifact.dat' },
+        ],
+      } as unknown as Parameters<AgenticReporter['onTestEnd']>[1]
+    );
+
+    const output = await streamToString(outputStream);
+
+    expect(output).toContain('- video (video, exists): `video.webm`');
+    expect(output).toContain('- snapshot (snapshot-html, exists): `snapshot.html`');
+    expect(output).toContain('- console (console-log, exists): `failure.console.log`');
+    expect(output).toContain('- custom (attachment, exists): `artifact.dat`');
+  });
+
+  it('summarizes failure source and includes project/test metadata', async () => {
+    const testWithId = {
+      ...mockTest,
+      id: 'project-file-test-id',
+      titlePath: () => ['root', 'suite', 'should fail'],
+    };
+    const beforeEachResult = {
+      ...mockResult,
+      error: {
+        message: 'Test timeout of 60000ms exceeded while running "beforeEach" hook.',
+        stack: 'Error: timeout\n    at tests/example.spec.ts:10:5',
+      },
+    };
+
+    reporter.onBegin(createConfig(), createSuite([testWithId]));
+    reporter.onTestEnd(
+      testWithId as unknown as Parameters<AgenticReporter['onTestEnd']>[0],
+      beforeEachResult as unknown as Parameters<AgenticReporter['onTestEnd']>[1]
+    );
+
+    const output = await streamToString(outputStream);
+
+    expect(output).toContain('<project>chromium</project>');
+    expect(output).toContain('<test_id>project-file-test-id</test_id>');
+    expect(output).toContain('<full_title_path>root › suite › should fail</full_title_path>');
+    expect(output).toContain('<failure_source phase="setup"');
+    expect(output).toContain('beforeEach hook');
+  });
+
+  it('classifies seed and assertion failures by source', async () => {
+    reporter.onBegin(createConfig(), createSuite([mockTest]));
+
+    reporter.onTestEnd(
+      mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0],
+      {
+        ...mockResult,
+        error: {
+          message: 'Error: Failed to seed duplicate annotations: duplicate timeKey',
+          stack: 'Error: Failed to seed duplicate annotations\n    at tests/example.spec.ts:62:22',
+        },
+      } as unknown as Parameters<AgenticReporter['onTestEnd']>[1]
+    );
+    reporter.onTestEnd(
+      mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0],
+      {
+        ...mockResult,
+        error: {
+          message: 'Error: expect(locator).toBeVisible() failed',
+          stack: 'Error: expect(locator).toBeVisible() failed\n    at tests/example.spec.ts:216:9',
+        },
+      } as unknown as Parameters<AgenticReporter['onTestEnd']>[1]
+    );
+
+    const output = await streamToString(outputStream);
+
+    expect(output).toContain('<failure_source phase="data_setup"');
+    expect(output).toContain('seed failure');
+    expect(output).toContain('<failure_source phase="assertion"');
+    expect(output).toContain('assertion failure');
+  });
+
+  it('classifies fixture setup runtime and unknown failure sources', async () => {
+    reporter.onBegin(createConfig(), createSuite([mockTest]));
+    reporter.onTestEnd(
+      mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0],
+      {
+        ...mockResult,
+        error: {
+          message: 'Fixture "$tags" failed',
+          stack: 'Error: fixture failure',
+        },
+      } as unknown as Parameters<AgenticReporter['onTestEnd']>[1]
+    );
+    reporter.onTestEnd(
+      mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0],
+      {
+        ...mockResult,
+        error: {
+          message: 'Application crashed unexpectedly',
+          stack: 'Error: app crash',
+        },
+      } as unknown as Parameters<AgenticReporter['onTestEnd']>[1]
+    );
+    reporter.onTestEnd(
+      mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0],
+      {
+        ...mockResult,
+        error: {
+          message: '',
+          stack: '',
+        },
+      } as unknown as Parameters<AgenticReporter['onTestEnd']>[1]
+    );
+
+    const output = await streamToString(outputStream);
+
+    expect(output).toContain('<failure_source phase="setup">setup hook</failure_source>');
+    expect(output).toContain('<failure_source phase="runtime">test runtime</failure_source>');
+    expect(output).toContain(
+      '<failure_source phase="unknown">unknown failure source</failure_source>'
+    );
   });
 
   it('omits attachment output when includeAttachments is false', async () => {
@@ -361,12 +580,17 @@ describe('AgenticReporter', () => {
 
   it('warns and still emits failure when detailed report file write fails', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    vi.mocked(fs.writeFileSync).mockImplementationOnce(() => {
-      throw new Error('disk full');
+    vi.mocked(fs.writeFileSync).mockImplementation((filePath) => {
+      if (String(filePath).endsWith('-details.xml')) {
+        throw new Error('disk full');
+      }
     });
 
     reporter.onBegin(createConfig(), createSuite([mockTest]));
-    reporter.onTestEnd(mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0], mockResult as unknown as Parameters<AgenticReporter['onTestEnd']>[1]);
+    reporter.onTestEnd(
+      mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0],
+      mockResult as unknown as Parameters<AgenticReporter['onTestEnd']>[1]
+    );
 
     const output = await streamToString(outputStream);
 
@@ -377,6 +601,26 @@ describe('AgenticReporter', () => {
     expect(output).toContain('<failure');
 
     warnSpy.mockRestore();
+    vi.mocked(fs.writeFileSync).mockReset();
+  });
+
+  it('warns and continues when manifest write fails', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.mocked(fs.writeFileSync).mockImplementation((filePath) => {
+      if (String(filePath).endsWith('agentic-run-manifest.json')) {
+        throw new Error('manifest disk full');
+      }
+    });
+
+    reporter.onBegin(createConfig(), createSuite([]));
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[AgenticReporter] Failed to write run manifest'),
+      expect.any(Error)
+    );
+
+    warnSpy.mockRestore();
+    vi.mocked(fs.writeFileSync).mockReset();
   });
 
   it('continues when previous report input cannot be read', async () => {
@@ -393,6 +637,162 @@ describe('AgenticReporter', () => {
 
     expect(output).toContain('[AgenticReporter] Failed to read input');
     expect(mockExit).not.toHaveBeenCalled();
+  });
+
+  it('supports non-interactive previous report warn policy', async () => {
+    reporter = new AgenticReporter({
+      outputStream,
+      checkPreviousReports: true,
+      previousReportsPolicy: 'warn',
+    });
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readdirSync).mockReturnValue(['test-details.xml'] as never);
+
+    reporter.onBegin(createConfig(), createSuite([]));
+
+    const output = await streamToString(outputStream);
+
+    expect(output).toContain('<agentic-prompt type="warning">');
+    expect(output).toContain('<policy>warn</policy>');
+    expect(fs.readSync).not.toHaveBeenCalled();
+    expect(mockExit).not.toHaveBeenCalled();
+  });
+
+  it('supports non-interactive previous report fail policy', () => {
+    reporter = new AgenticReporter({
+      outputStream,
+      checkPreviousReports: true,
+      previousReportsPolicy: 'fail',
+    });
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readdirSync).mockReturnValue(['test-details.xml'] as never);
+
+    reporter.onBegin(createConfig(), createSuite([]));
+
+    expect(fs.readSync).not.toHaveBeenCalled();
+    expect(mockExit).toHaveBeenCalledWith(1);
+  });
+
+  it('does not write manifests or stale warnings when detailed reports are disabled', async () => {
+    reporter = new AgenticReporter({ outputStream, enableDetailedReport: false });
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readdirSync).mockReturnValue(['old-details.xml'] as never);
+
+    reporter.onBegin(createConfig(), createSuite([mockTest]));
+    reporter.onEnd({ status: 'passed' } as unknown as Parameters<AgenticReporter['onEnd']>[0]);
+
+    const output = await streamToString(outputStream);
+
+    expect(output).not.toContain('<stale_artifact_warning');
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('does not emit stale warnings when previousReportsPolicy is ignore', async () => {
+    reporter = new AgenticReporter({ outputStream, previousReportsPolicy: 'ignore' });
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readdirSync).mockReturnValue(['old-details.xml'] as never);
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ runId: 'old&run' }) as never);
+
+    reporter.onBegin(createConfig(), createSuite([]));
+
+    const output = await streamToString(outputStream);
+
+    expect(output).not.toContain('<stale_artifact_warning');
+  });
+
+  it('escapes stale warning manifest ids and filenames', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readdirSync).mockReturnValue(['bad&name-details.xml'] as never);
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ runId: 'old&run' }) as never);
+
+    reporter.onBegin(createConfig(), createSuite([]));
+
+    const output = await streamToString(outputStream);
+
+    expect(output).toContain('previous_run_id="old&amp;run"');
+    expect(output).toContain('<failure>bad&amp;name-details.xml</failure>');
+  });
+
+  it('uses unknown when stale manifest has no run id', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readdirSync).mockReturnValue(['old-details.xml'] as never);
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ status: 'failed' }) as never);
+
+    reporter.onBegin(createConfig(), createSuite([]));
+
+    const output = await streamToString(outputStream);
+
+    expect(output).toContain('previous_run_id="unknown"');
+  });
+
+  it('skips stale warning when manifest is missing or no stale detail files exist', async () => {
+    vi.mocked(fs.existsSync).mockImplementation(
+      (filePath) => String(filePath) === 'test-results-mock'
+    );
+
+    reporter.onBegin(createConfig(), createSuite([]));
+
+    let output = await streamToString(outputStream);
+    expect(output).not.toContain('<stale_artifact_warning');
+
+    outputStream = new PassThrough();
+    reporter = new AgenticReporter({ outputStream, enableDetailedReport: true });
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readdirSync).mockReturnValue(['not-a-detail.txt'] as never);
+
+    reporter.onBegin(createConfig(), createSuite([]));
+    output = await streamToString(outputStream);
+
+    expect(output).not.toContain('<stale_artifact_warning');
+  });
+
+  it('reports stale artifact inspection failures without throwing', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readdirSync).mockReturnValue(['old-details.xml'] as never);
+    vi.mocked(fs.readFileSync).mockReturnValue('not-json' as never);
+
+    reporter.onBegin(createConfig(), createSuite([]));
+
+    const output = await streamToString(outputStream);
+
+    expect(output).toContain('[AgenticReporter] Failed to inspect stale artifacts');
+  });
+
+  it('ignores previous reports without prompting when checkPreviousReports uses ignore policy', async () => {
+    reporter = new AgenticReporter({
+      outputStream,
+      checkPreviousReports: true,
+      previousReportsPolicy: 'ignore',
+    });
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readdirSync).mockReturnValue(['old-details.xml'] as never);
+
+    reporter.onBegin(createConfig(), createSuite([]));
+
+    const output = await streamToString(outputStream);
+
+    expect(output).not.toContain('Previous Failure Reports Detected');
+    expect(fs.readSync).not.toHaveBeenCalled();
+  });
+
+  it('uses the test project for metadata and reproduce commands when available', async () => {
+    const projectTest = {
+      ...mockTest,
+      parent: {
+        project: () => ({ name: 'firefox' }),
+      },
+    };
+
+    reporter.onBegin(createConfig(), createSuite([projectTest]));
+    reporter.onTestEnd(
+      projectTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0],
+      mockResult as unknown as Parameters<AgenticReporter['onTestEnd']>[1]
+    );
+
+    const output = await streamToString(outputStream);
+
+    expect(output).toContain('<project>firefox</project>');
+    expect(output).toContain('--project=firefox');
   });
 
   it('does not prompt when previous report directory is missing', async () => {
@@ -442,8 +842,8 @@ function streamToString(stream: PassThrough): Promise<string> {
     });
     stream.end();
     stream.on('finish', () => {
-        resolve(data);
-    })
+      resolve(data);
+    });
   });
 }
 
