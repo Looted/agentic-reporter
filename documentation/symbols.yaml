@@ -1,0 +1,7 @@
+# symbols.yaml
+# AUTHORED fields (edit freely):
+#   id, title, sourceFile, links, status, tags, owner, priority
+# GENERATED fields (never edit manually — overwritten by kibi sync and kb.symbols.refresh):
+#   sourceLine, sourceColumn, sourceEndLine, sourceEndColumn
+# Run `kibi sync` or call the `kb.symbols.refresh` MCP tool to refresh coordinates.
+symbols: []
