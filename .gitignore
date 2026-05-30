@@ -21,6 +21,9 @@ playwright-report-*
 .playwright/
 .playwright-test/
 
+# Coverage
+coverage/
+
 # IDE
 .vscode/
 .idea/
