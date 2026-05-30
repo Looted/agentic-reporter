@@ -171,10 +171,7 @@ describe('AgenticReporter', () => {
     vi.mocked(fs.readdirSync).mockReturnValue(['test-details.xml'] as any);
 
     // Mock user input 'n'
-    vi.mocked(fs.readSync).mockImplementation((fd, buffer, offset, length) => {
-      buffer.write('n');
-      return 1;
-    });
+    mockReadInput('n');
 
     reporter.onBegin(config, { allTests: () => [] } as any);
 
@@ -197,10 +194,7 @@ describe('AgenticReporter', () => {
     vi.mocked(fs.readdirSync).mockReturnValue(['test-details.xml'] as any);
 
     // Mock user input 'y'
-    vi.mocked(fs.readSync).mockImplementation((fd, buffer, offset, length) => {
-      buffer.write('y');
-      return 1;
-    });
+    mockReadInput('y');
 
     reporter.onBegin(config, { allTests: () => [] } as any);
 
@@ -227,10 +221,7 @@ describe('AgenticReporter', () => {
     ] as any);
 
     // Mock user input 'n' to exit
-    vi.mocked(fs.readSync).mockImplementation((fd, buffer) => {
-      buffer.write('n');
-      return 1;
-    });
+    mockReadInput('n');
 
     reporter.onBegin(config, { allTests: () => [] } as any);
 
@@ -245,6 +236,202 @@ describe('AgenticReporter', () => {
 
     expect(mockExit).toHaveBeenCalledWith(1);
   });
+
+  it('validates invalid numeric options and falls back to defaults', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    reporter = new AgenticReporter({
+      outputStream,
+      maxFailures: 0,
+      maxStackFrames: 0,
+    });
+
+    reporter.onBegin(createConfig(), createSuite([]));
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[AgenticReporter] maxFailures must be >= 1, using default'
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[AgenticReporter] maxStackFrames must be >= 1, using default'
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  it('uses process stdout as the default output stream option', () => {
+    const defaultReporter = new AgenticReporter();
+
+    expect(defaultReporter).toBeInstanceOf(AgenticReporter);
+  });
+
+  it('uses chromium fallback when first project has no name', async () => {
+    reporter.onBegin({ ...createConfig(), projects: [{ name: '' }] } as unknown as Parameters<AgenticReporter['onBegin']>[0], createSuite([mockTest]));
+    reporter.onTestEnd(mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0], mockResult as unknown as Parameters<AgenticReporter['onTestEnd']>[1]);
+
+    const output = await streamToString(outputStream);
+
+    expect(output).toContain('--project=chromium');
+  });
+
+  it('swallows stdout and stderr hook events', async () => {
+    reporter.onStdOut('ignored stdout');
+    reporter.onStdErr(Buffer.from('ignored stderr'));
+
+    const output = await streamToString(outputStream);
+
+    expect(output).toBe('');
+  });
+
+  it('counts skipped tests and emits final summary', async () => {
+    reporter.onBegin(createConfig(), createSuite([mockTest]));
+    reporter.onTestEnd(
+      mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0],
+      { ...mockResult, status: 'skipped' } as unknown as Parameters<AgenticReporter['onTestEnd']>[1]
+    );
+    reporter.onEnd({ status: 'passed' } as unknown as Parameters<AgenticReporter['onEnd']>[0]);
+
+    const output = await streamToString(outputStream);
+
+    expect(output).toContain('skipped="1"');
+    expect(output).toContain('<result_summary status="passed"');
+  });
+
+  it('emits overflow warning in final summary when failures were suppressed', async () => {
+    reporter = new AgenticReporter({ outputStream, maxFailures: 1 });
+    reporter.onBegin(createConfig(), createSuite([mockTest]));
+    reporter.onTestEnd(mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0], mockResult as unknown as Parameters<AgenticReporter['onTestEnd']>[1]);
+    reporter.onTestEnd(mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0], mockResult as unknown as Parameters<AgenticReporter['onTestEnd']>[1]);
+    reporter.onEnd({ status: 'failed' } as unknown as Parameters<AgenticReporter['onEnd']>[0]);
+
+    const output = await streamToString(outputStream);
+
+    expect(output).toContain('<overflow_warning suppressed="1">');
+    expect(output).toContain('failed="2"');
+  });
+
+  it('handles missing error objects with unknown fallback context', async () => {
+    reporter.onBegin(createConfig(), createSuite([mockTest]));
+    reporter.onTestEnd(
+      mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0],
+      { ...mockResult, error: undefined } as unknown as Parameters<AgenticReporter['onTestEnd']>[1]
+    );
+
+    const output = await streamToString(outputStream);
+
+    expect(output).toContain('<error_summary>Unknown error</error_summary>');
+    expect(output).toContain('type="unknown"');
+  });
+
+  it('includes attachment paths with default names and skips attachments without paths', async () => {
+    reporter.onBegin(createConfig(), createSuite([mockTest]));
+    reporter.onTestEnd(
+      mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0],
+      {
+        ...mockResult,
+        attachments: [
+          { name: 'trace', path: 'trace.zip' },
+          { path: 'screenshot.png' },
+          { name: 'body-only' },
+        ],
+      } as unknown as Parameters<AgenticReporter['onTestEnd']>[1]
+    );
+
+    const output = await streamToString(outputStream);
+
+    expect(output).toContain('- trace: `trace.zip`');
+    expect(output).toContain('- attachment: `screenshot.png`');
+    expect(output).not.toContain('body-only');
+  });
+
+  it('omits attachment output when includeAttachments is false', async () => {
+    reporter = new AgenticReporter({ outputStream, includeAttachments: false });
+    reporter.onBegin(createConfig(), createSuite([mockTest]));
+    reporter.onTestEnd(
+      mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0],
+      {
+        ...mockResult,
+        attachments: [{ name: 'trace', path: 'trace.zip' }],
+      } as unknown as Parameters<AgenticReporter['onTestEnd']>[1]
+    );
+
+    const output = await streamToString(outputStream);
+
+    expect(output).not.toContain('trace.zip');
+  });
+
+  it('warns and still emits failure when detailed report file write fails', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.mocked(fs.writeFileSync).mockImplementationOnce(() => {
+      throw new Error('disk full');
+    });
+
+    reporter.onBegin(createConfig(), createSuite([mockTest]));
+    reporter.onTestEnd(mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0], mockResult as unknown as Parameters<AgenticReporter['onTestEnd']>[1]);
+
+    const output = await streamToString(outputStream);
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[AgenticReporter] Failed to write detailed report'),
+      expect.any(Error)
+    );
+    expect(output).toContain('<failure');
+
+    warnSpy.mockRestore();
+  });
+
+  it('continues when previous report input cannot be read', async () => {
+    reporter = new AgenticReporter({ outputStream, checkPreviousReports: true });
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readdirSync).mockReturnValue(['test-details.xml'] as never);
+    vi.mocked(fs.readSync).mockImplementation(() => {
+      throw new Error('no stdin');
+    });
+
+    reporter.onBegin(createConfig(), createSuite([]));
+
+    const output = await streamToString(outputStream);
+
+    expect(output).toContain('[AgenticReporter] Failed to read input');
+    expect(mockExit).not.toHaveBeenCalled();
+  });
+
+  it('does not prompt when previous report directory is missing', async () => {
+    reporter = new AgenticReporter({ outputStream, checkPreviousReports: true });
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
+    reporter.onBegin(createConfig(), createSuite([]));
+
+    const output = await streamToString(outputStream);
+
+    expect(output).not.toContain('<agentic-prompt');
+  });
+
+  it('does not delete reports when detailed reports are disabled', () => {
+    reporter = new AgenticReporter({ outputStream, enableDetailedReport: false });
+
+    reporter.onBegin(createConfig(), createSuite([]));
+    reporter.onTestEnd(
+      mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0],
+      { ...mockResult, status: 'passed' } as unknown as Parameters<AgenticReporter['onTestEnd']>[1]
+    );
+
+    expect(fs.unlinkSync).not.toHaveBeenCalled();
+  });
+
+  it('ignores deletion failures for stale detailed reports', () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.unlinkSync).mockImplementationOnce(() => {
+      throw new Error('locked');
+    });
+
+    reporter.onBegin(createConfig(), createSuite([]));
+    reporter.onTestEnd(
+      mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0],
+      { ...mockResult, status: 'passed' } as unknown as Parameters<AgenticReporter['onTestEnd']>[1]
+    );
+
+    expect(fs.unlinkSync).toHaveBeenCalled();
+  });
 });
 
 function streamToString(stream: PassThrough): Promise<string> {
@@ -257,5 +444,42 @@ function streamToString(stream: PassThrough): Promise<string> {
     stream.on('finish', () => {
         resolve(data);
     })
+  });
+}
+
+function createConfig(): Parameters<AgenticReporter['onBegin']>[0] {
+  return {
+    workers: 1,
+    projects: [{ name: 'chromium' }],
+    outputDir: 'test-results-mock',
+  } as unknown as Parameters<AgenticReporter['onBegin']>[0];
+}
+
+function createSuite(tests: unknown[]): Parameters<AgenticReporter['onBegin']>[1] {
+  return {
+    allTests: () => tests,
+  } as unknown as Parameters<AgenticReporter['onBegin']>[1];
+}
+
+function writeMockInput(buffer: NodeJS.ArrayBufferView, value: string): void {
+  Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength).write(value);
+}
+
+function mockReadInput(value: string): void {
+  const readSyncMock = vi.mocked(fs.readSync) as unknown as {
+    mockImplementation(
+      implementation: (
+        fd: number,
+        buffer: NodeJS.ArrayBufferView,
+        offset: number,
+        length: number,
+        position: fs.ReadPosition | null
+      ) => number
+    ): void;
+  };
+
+  readSyncMock.mockImplementation((_fd, buffer) => {
+    writeMockInput(buffer, value);
+    return 1;
   });
 }

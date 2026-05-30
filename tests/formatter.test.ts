@@ -3,9 +3,13 @@ import {
   escapeXml,
   sanitizeId,
   cleanStack,
+  buildMarkdownContext,
+  formatFailure,
   formatHeader,
+  formatOverflowWarning,
   formatSummary,
 } from '../src/formatter';
+import type { FailureContext, ResolvedOptions } from '../src/types';
 
 describe('formatter', () => {
   describe('escapeXml', () => {
@@ -21,6 +25,10 @@ describe('formatter', () => {
 
     it('handles empty string', () => {
       expect(escapeXml('')).toBe('');
+    });
+
+    it('returns unchanged strings that do not need escaping', () => {
+      expect(escapeXml('plain text')).toBe('plain text');
     });
   });
 
@@ -40,6 +48,10 @@ describe('formatter', () => {
   });
 
   describe('cleanStack', () => {
+    it('returns empty string for empty stack', () => {
+      expect(cleanStack('', 10)).toBe('');
+    });
+
     it('removes node_modules frames', () => {
       const stack = `Error: foo
     at Object.<anonymous> (/app/tests/foo.ts:1:1)
@@ -90,6 +102,54 @@ describe('formatter', () => {
       const cleaned = cleanStack(stack, 10);
       expect(cleaned).toBe('a\nb');
     });
+
+    it('skips blank lines while preserving meaningful frames', () => {
+      const stack = 'Error\n\n    at app/test.ts:1:1';
+      expect(cleanStack(stack, 10)).toBe('Error\n    at app/test.ts:1:1');
+    });
+  });
+
+  describe('formatFailure', () => {
+    it('includes attachments and details file when present', () => {
+      const output = formatFailure(createFailureContext({
+        attachments: '- trace: `trace.zip`',
+        detailsPath: 'test-results/failure-details.xml',
+      }), createOptions());
+
+      expect(output).toContain('**Attachments:**');
+      expect(output).toContain('- trace: `trace.zip`');
+      expect(output).toContain('<details_file>test-results/failure-details.xml</details_file>');
+    });
+
+    it('omits optional sections when context has no stack logs attachments or details', () => {
+      const output = formatFailure(createFailureContext({
+        stack: '',
+        logs: '',
+        attachments: '',
+        detailsPath: undefined,
+      }), createOptions());
+
+      expect(output).not.toContain('**Error Stack:**');
+      expect(output).not.toContain('**Console Logs');
+      expect(output).not.toContain('**Attachments:**');
+      expect(output).not.toContain('<details_file>');
+    });
+
+    it('builds markdown context with attachment section', () => {
+      const markdown = buildMarkdownContext(createFailureContext({
+        attachments: '- screenshot: `screen.png`',
+      }), createOptions());
+
+      expect(markdown).toContain('**Attachments:**');
+      expect(markdown).toContain('- screenshot: `screen.png`');
+    });
+  });
+
+  describe('formatOverflowWarning', () => {
+    it('formats suppressed failure count', () => {
+      expect(formatOverflowWarning(2, 3)).toContain('suppressed="3"');
+      expect(formatOverflowWarning(2, 3)).toContain('Max failure limit (2) reached');
+    });
   });
 
   describe('formatHeader', () => {
@@ -112,3 +172,36 @@ describe('formatter', () => {
     });
   });
 });
+
+function createFailureContext(overrides: Partial<FailureContext> = {}): FailureContext {
+  return {
+    failureId: 'sample_failure',
+    errorType: 'assertion',
+    fileName: 'sample.spec.ts',
+    lineNumber: 12,
+    duration: 34,
+    retry: 0,
+    errorMessage: 'Expected value',
+    stack: 'Error: Expected value',
+    logs: 'console output',
+    attachments: '',
+    hint: 'Check assertion.',
+    title: 'sample test',
+    reproduceCommand: 'npx playwright test sample.spec.ts:12 --project=chromium',
+    ...overrides,
+  };
+}
+
+function createOptions(): ResolvedOptions {
+  return {
+    maxFailures: 5,
+    maxStackFrames: 8,
+    maxLogLines: 5,
+    maxLogChars: 500,
+    includeAttachments: true,
+    enableDetailedReport: true,
+    checkPreviousReports: false,
+    exitOnExceedingMaxFailures: false,
+    outputStream: process.stdout,
+  };
+}
