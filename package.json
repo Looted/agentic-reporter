@@ -45,6 +45,9 @@
     "eslint": "^8.57.1",
     "eslint-config-prettier": "^9.1.2",
     "eslint-plugin-prettier": "^5.2.1",
+    "kibi-cli": "^0.12.0",
+    "kibi-core": "^0.6.0",
+    "kibi-mcp": "^0.15.0",
     "prettier": "^3.3.3",
     "typescript": "^5.0.0",
     "vitest": "^2.1.9"
