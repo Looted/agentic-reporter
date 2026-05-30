@@ -7,6 +7,8 @@ A high-density, token-efficient Playwright reporter designed for autonomous AI c
 - **Zero-Latency**: Streams to stdout, no file I/O
 - **Token Efficiency**: "Silence on Success" - passing tests emit nothing
 - **High-Signal**: Captures stack traces, console logs, attachments
+- **Artifact-Aware**: Classifies traces, screenshots, videos, snapshots, and missing paths
+- **Run Manifests**: Writes `agentic-run-manifest.json` to identify stale artifacts between runs
 - **Overflow Protection**: Truncates after N failures to prevent context exhaustion
 - **Extensible**: Custom hint patterns and output streams
 
@@ -39,6 +41,7 @@ export default defineConfig({
 | `maxLogChars`                | number         | 500     | Max log characters                            |
 | `includeAttachments`         | boolean        | true    | Include trace/screenshot paths                |
 | `checkPreviousReports`       | boolean        | false   | Prompt to continue if previous failures exist |
+| `previousReportsPolicy`      | string         | prompt  | `prompt`, `warn`, `fail`, or `ignore`         |
 | `exitOnExceedingMaxFailures` | boolean        | false   | Stop execution when max failures reached      |
 | `outputStream`               | WritableStream | stdout  | Custom output stream                          |
 
