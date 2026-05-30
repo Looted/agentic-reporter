@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import AgenticReporter from '../src/reporter';
+import { sanitizeId } from '../src/formatter';
 import * as fs from 'fs';
 import * as path from 'path';
 import { PassThrough } from 'stream';
@@ -16,6 +17,13 @@ vi.mock('fs', async () => {
     readSync: vi.fn(),
     existsSync: vi.fn(),
     unlinkSync: vi.fn(),
+    promises: {
+      unlink: vi.fn().mockResolvedValue(undefined),
+      mkdir: vi.fn().mockResolvedValue(undefined),
+      writeFile: vi.fn().mockResolvedValue(undefined),
+      stat: vi.fn().mockResolvedValue({ isDirectory: () => true }),
+      readdir: vi.fn().mockResolvedValue([]),
+    },
   };
 });
 
@@ -42,6 +50,9 @@ describe('AgenticReporter', () => {
     title: 'should fail',
     titlePath: () => ['tests', 'example.spec.ts', 'should fail'],
     location: { file: 'tests/example.spec.ts', line: 10 },
+    parent: {
+      project: () => ({ name: 'chromium' }),
+    },
   };
 
   const mockResult = {
@@ -57,7 +68,7 @@ describe('AgenticReporter', () => {
     attachments: [],
   };
 
-  it('writes detailed report file on failure', () => {
+  it('writes detailed report file on failure', async () => {
     // Setup
     const config = {
       workers: 1,
@@ -67,23 +78,17 @@ describe('AgenticReporter', () => {
 
     reporter.onBegin(config, { allTests: () => [mockTest] } as any);
     reporter.onTestEnd(mockTest as any, mockResult as any);
+    await reporter.onEnd({ status: 'failed' } as any);
 
     // Verify file write
-    const expectedFileName = 'tests_example_spec_ts_should_fail-details.xml';
+    const expectedFileName = `${sanitizeId(mockTest.titlePath().join('_'))}-details.xml`;
     const expectedPath = path.join('test-results-mock', expectedFileName);
 
-    expect(fs.mkdirSync).toHaveBeenCalledWith('test-results-mock', { recursive: true });
-    expect(fs.writeFileSync).toHaveBeenCalledWith(
-      expectedPath,
-      expect.stringContaining('<failure')
-    );
+    expect(fs.promises.mkdir).toHaveBeenCalledWith('test-results-mock', { recursive: true });
+    expect(fs.promises.writeFile).toHaveBeenCalledWith(expectedPath, expect.stringContaining('<failure'));
 
     // Verify file content has full logs
-    const callArgs = vi
-      .mocked(fs.writeFileSync)
-      .mock.calls.find(([filePath]) => filePath === expectedPath);
-    expect(callArgs).toBeDefined();
-    if (!callArgs) return;
+    const callArgs = vi.mocked(fs.promises.writeFile).mock.calls[0];
     const fileContent = callArgs[1] as string;
     expect(fileContent).toContain('console log 1');
     expect(fileContent).toContain('console log 2');
@@ -156,15 +161,15 @@ describe('AgenticReporter', () => {
     reporter.onBegin(config, { allTests: () => [mockTest] } as any);
     reporter.onTestEnd(mockTest as any, mockResult as any);
 
-    const output = await streamToString(outputStream);
-    const expectedFileName = 'tests_example_spec_ts_should_fail-details.xml';
+    await new Promise(resolve => setTimeout(resolve, 0)); const output = await streamToString(outputStream);
+    const expectedFileName = `${sanitizeId(mockTest.titlePath().join('_'))}-details.xml`;
     const expectedPath = path.join('test-results-mock', expectedFileName);
 
     expect(output).toContain(`<details_file>${expectedPath}</details_file>`);
-    expect(output).toContain(`**Full Details:** ${expectedPath}`);
+    expect(output).toContain(`**Full Details:** \`${expectedPath}\``);
   });
 
-  it('does not write file if enableDetailedReport is false', () => {
+  it('does not write file if enableDetailedReport is false', async () => {
     reporter = new AgenticReporter({ outputStream, enableDetailedReport: false });
     const config = {
       workers: 1,
@@ -174,18 +179,15 @@ describe('AgenticReporter', () => {
 
     reporter.onBegin(config, { allTests: () => [mockTest] } as any);
     reporter.onTestEnd(mockTest as any, mockResult as any);
+    await reporter.onEnd({ status: 'failed' } as any);
 
-    const detailWrites = vi
-      .mocked(fs.writeFileSync)
-      .mock.calls.filter(([filePath]) => String(filePath).endsWith('-details.xml'));
-    expect(detailWrites).toHaveLength(0);
+    expect(fs.promises.writeFile).not.toHaveBeenCalled();
   });
 
-  it('exits immediately when max failures exceeded if option is enabled', () => {
+  it('exits immediately when max failures exceeded (default behavior)', () => {
     reporter = new AgenticReporter({
       outputStream,
       maxFailures: 1,
-      exitOnExceedingMaxFailures: true,
     });
     const config = { workers: 1, projects: [] } as any;
 
@@ -200,7 +202,41 @@ describe('AgenticReporter', () => {
     expect(mockExit).toHaveBeenCalledWith(1);
   });
 
-  it('deletes existing failure report when test passes', () => {
+  it('does not exit by default (maxFailures is false/Infinity)', () => {
+    // Default options
+    reporter = new AgenticReporter({
+      outputStream,
+    });
+    const config = { workers: 1, projects: [] } as any;
+
+    reporter.onBegin(config, { allTests: () => [] } as any);
+
+    // 10 failures
+    for (let i = 0; i < 10; i++) {
+        reporter.onTestEnd(mockTest as any, mockResult as any);
+    }
+
+    expect(mockExit).not.toHaveBeenCalled();
+  });
+
+  it('does not exit if maxFailures is explicitly false', () => {
+    reporter = new AgenticReporter({
+      outputStream,
+      maxFailures: false,
+    });
+    const config = { workers: 1, projects: [] } as any;
+
+    reporter.onBegin(config, { allTests: () => [] } as any);
+
+    // 10 failures
+    for (let i = 0; i < 10; i++) {
+        reporter.onTestEnd(mockTest as any, mockResult as any);
+    }
+
+    expect(mockExit).not.toHaveBeenCalled();
+  });
+
+  it('deletes existing failure report and snapshot when test passes', async () => {
     reporter = new AgenticReporter({ outputStream, enableDetailedReport: true });
     const config = {
       workers: 1,
@@ -208,25 +244,60 @@ describe('AgenticReporter', () => {
       outputDir: 'test-results-mock',
     } as any;
 
-    // Mock file existence
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    const expectedFileName = `${sanitizeId(mockTest.titlePath().join('_'))}-details.xml`;
+    const expectedPath = path.join('test-results-mock', expectedFileName);
+    const expectedSnapshotName = `${sanitizeId(mockTest.titlePath().join('_'))}-snapshot.html`;
+    const expectedSnapshotPath = path.join('test-results-mock', expectedSnapshotName);
 
-    reporter.onBegin(config, { allTests: () => [] } as any);
+    // Mock file existence in fs.promises.readdir during onBegin
+    vi.mocked(fs.promises.stat).mockResolvedValue({ isDirectory: () => true } as any);
+    vi.mocked(fs.promises.readdir).mockResolvedValue([expectedFileName, expectedSnapshotName] as any);
+
+    await reporter.onBegin(config, { allTests: () => [] } as any);
 
     // Passing test
     const passedResult = { ...mockResult, status: 'passed' };
     reporter.onTestEnd(mockTest as any, passedResult as any);
 
-    const expectedFileName = 'tests_example_spec_ts_should_fail-details.xml';
-    const expectedPath = path.join('test-results-mock', expectedFileName);
+    await reporter.onEnd({ status: 'passed' } as any);
 
-    expect(fs.unlinkSync).toHaveBeenCalledWith(expectedPath);
+    expect(fs.promises.unlink).toHaveBeenCalledWith(expectedPath);
+    expect(fs.promises.unlink).toHaveBeenCalledWith(expectedSnapshotPath);
   });
 
-  it('checks for previous reports and exits if user says no', () => {
+  it('reports flaky tests as failures and emits details', async () => {
+    reporter = new AgenticReporter({ outputStream, enableDetailedReport: true });
+    const config = {
+      workers: 1,
+      projects: [{ name: 'chromium' }],
+      outputDir: 'test-results-mock',
+    } as any;
+
+    await reporter.onBegin(config, { allTests: () => [mockTest] } as any);
+
+    const flakyTest = {
+      ...mockTest,
+      retries: 1,
+      results: [
+        { status: 'failed', error: { message: 'Failed on first try' }, attachments: [], stdout: [], stderr: [], duration: 100, retry: 0 },
+        { status: 'passed', attachments: [], stdout: [], stderr: [], duration: 100, retry: 1 }
+      ]
+    };
+
+    const passedResult = { status: 'passed', retry: 1 };
+    reporter.onTestEnd(flakyTest as any, passedResult as any);
+
+    await new Promise(resolve => setTimeout(resolve, 0)); const output = await streamToString(outputStream);
+
+    expect(output).toContain('<error_summary>Failed on first try</error_summary>');
+    expect(output).toContain('failure id=');
+  });
+
+  it('warns about previous reports but continues', async () => {
     reporter = new AgenticReporter({
       outputStream,
       checkPreviousReports: true,
+      previousReportsPolicy: 'warn',
     });
     const config = {
       workers: 1,
@@ -236,76 +307,107 @@ describe('AgenticReporter', () => {
 
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.readdirSync).mockReturnValue(['test-details.xml'] as any);
-
-    // Mock user input 'n'
-    mockReadInput('n');
-
-    reporter.onBegin(config, { allTests: () => [] } as any);
-
-    expect(fs.readdirSync).toHaveBeenCalled();
-    expect(mockExit).toHaveBeenCalledWith(1);
-  });
-
-  it('checks for previous reports and continues if user says yes', () => {
-    reporter = new AgenticReporter({
-      outputStream,
-      checkPreviousReports: true,
-    });
-    const config = {
-      workers: 1,
-      projects: [{ name: 'chromium' }],
-      outputDir: 'test-results-mock',
-    } as any;
-
-    vi.mocked(fs.existsSync).mockReturnValue(true);
-    vi.mocked(fs.readdirSync).mockReturnValue(['test-details.xml'] as any);
-
-    // Mock user input 'y'
-    mockReadInput('y');
-
-    reporter.onBegin(config, { allTests: () => [] } as any);
-
-    expect(fs.readdirSync).toHaveBeenCalled();
-    expect(mockExit).not.toHaveBeenCalled();
-  });
-
-  it('displays structured prompt with failure list', async () => {
-    reporter = new AgenticReporter({
-      outputStream,
-      checkPreviousReports: true,
-    });
-    const config = {
-      workers: 1,
-      projects: [{ name: 'chromium' }],
-      outputDir: 'test-results-mock',
-    } as any;
-
-    vi.mocked(fs.existsSync).mockReturnValue(true);
-    vi.mocked(fs.readdirSync).mockReturnValue([
-      'test-details.xml',
-      'my_test_spec_ts_fail-details.xml',
-      'special&test-details.xml',
-      'other_file.txt',
-    ] as any);
-
-    // Mock user input 'n' to exit
-    mockReadInput('n');
 
     reporter.onBegin(config, { allTests: () => [] } as any);
 
     const output = await streamToString(outputStream);
 
-    expect(output).toContain('<agentic-prompt type="decision">');
-    expect(output).toContain('<title>Previous Failure Reports Detected</title>');
-    expect(output).toContain('<failures>');
+    expect(output).toContain('<agentic-prompt type="warning">');
     expect(output).toContain('test-details.xml');
-    expect(output).toContain('my_test_spec_ts_fail-details.xml');
-    expect(output).toContain('special&amp;test-details.xml');
-    expect(output).toContain(
-      'Do you want to ignore these failures and run the tests anyway? (y/n)'
-    );
 
-    expect(mockExit).toHaveBeenCalledWith(1);
+
+    // Should NOT exit and NOT ask for input
+    expect(mockExit).not.toHaveBeenCalled();
+    expect(fs.readSync).not.toHaveBeenCalled();
+  });
+
+  it('uses custom reproduce command if provided', async () => {
+    reporter = new AgenticReporter({
+      outputStream,
+      getReproduceCommand: (data) => `custom run ${data.file}:${data.line} --p=${data.project}`,
+    });
+    const config = {
+      workers: 1,
+      projects: [{ name: 'chromium' }],
+      outputDir: 'test-results-mock',
+    } as any;
+
+    reporter.onBegin(config, { allTests: () => [mockTest] } as any);
+    reporter.onTestEnd(mockTest as any, mockResult as any);
+
+    await new Promise(resolve => setTimeout(resolve, 0)); const output = await streamToString(outputStream);
+
+    expect(output).toContain('<reproduce_command>custom run tests/example.spec.ts:10 --p=chromium</reproduce_command>');
+  });
+
+  it('correctly resolves project name from test parent', async () => {
+    reporter = new AgenticReporter({ outputStream });
+    const config = {
+      workers: 1,
+      projects: [{ name: 'chromium' }, { name: 'firefox' }],
+      outputDir: 'test-results-mock',
+    } as any;
+
+    const firefoxTest = {
+      ...mockTest,
+      parent: {
+        project: () => ({ name: 'firefox' }),
+      },
+    };
+
+    reporter.onBegin(config, { allTests: () => [firefoxTest] } as any);
+    reporter.onTestEnd(firefoxTest as any, mockResult as any);
+
+    await new Promise(resolve => setTimeout(resolve, 0)); const output = await streamToString(outputStream);
+
+    expect(output).toContain('--project=firefox');
+  });
+
+  describe('Progress Heartbeat', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      // Ensure Date.now() starts at a known time
+      vi.setSystemTime(1000);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('emits progress periodically', async () => {
+      reporter = new AgenticReporter({
+        outputStream,
+        progressInterval: 5000,
+      });
+
+      const config = { workers: 1, projects: [] } as any;
+      await reporter.onBegin(config, { allTests: () => [1, 2, 3] } as any);
+
+      // Advance time by 5s to trigger interval
+      vi.advanceTimersByTime(5000);
+
+      // We use a small timeout to let the event loop process the write before streamToString captures it
+      await reporter.onEnd({ status: 'passed' } as any);
+
+      const output = await streamToString(outputStream);
+      expect(output).toContain('<agentic_progress passed="0" failed="0" skipped="0" flaky="0" total="3" elapsed="5000ms" />');
+    });
+
+    it('does not emit progress if interval is disabled', async () => {
+      reporter = new AgenticReporter({
+        outputStream,
+        progressInterval: false,
+      });
+
+      const config = { workers: 1, projects: [] } as any;
+      await reporter.onBegin(config, { allTests: () => [1, 2, 3] } as any);
+
+      vi.advanceTimersByTime(100000);
+      await reporter.onEnd({ status: 'passed' } as any);
+
+      const output = await streamToString(outputStream);
+      expect(output).not.toContain('<agentic_progress');
+    });
   });
 
   it('validates invalid numeric options and falls back to defaults', () => {
@@ -320,14 +422,14 @@ describe('AgenticReporter', () => {
     reporter.onBegin(createConfig(), createSuite([]));
 
     expect(warnSpy).toHaveBeenCalledWith(
-      '[AgenticReporter] maxFailures must be >= 1, using default'
+      '[AgenticReporter] maxFailures must be >= 1 or false, using default'
     );
     expect(warnSpy).toHaveBeenCalledWith(
       '[AgenticReporter] maxStackFrames must be >= 1, using default'
     );
 
     warnSpy.mockRestore();
-    vi.mocked(fs.writeFileSync).mockReset();
+    vi.mocked(fs.promises.writeFile).mockReset();
   });
 
   it('uses process stdout as the default output stream option', () => {
@@ -347,6 +449,7 @@ describe('AgenticReporter', () => {
       mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0],
       mockResult as unknown as Parameters<AgenticReporter['onTestEnd']>[1]
     );
+    await reporter.onEnd({ status: 'failed' } as unknown as Parameters<AgenticReporter['onEnd']>[0]);
 
     const output = await streamToString(outputStream);
 
@@ -368,7 +471,7 @@ describe('AgenticReporter', () => {
       mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0],
       { ...mockResult, status: 'skipped' } as unknown as Parameters<AgenticReporter['onTestEnd']>[1]
     );
-    reporter.onEnd({ status: 'passed' } as unknown as Parameters<AgenticReporter['onEnd']>[0]);
+    await reporter.onEnd({ status: 'passed' } as unknown as Parameters<AgenticReporter['onEnd']>[0]);
 
     const output = await streamToString(outputStream);
 
@@ -387,7 +490,7 @@ describe('AgenticReporter', () => {
       mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0],
       mockResult as unknown as Parameters<AgenticReporter['onTestEnd']>[1]
     );
-    reporter.onEnd({ status: 'failed' } as unknown as Parameters<AgenticReporter['onEnd']>[0]);
+    await reporter.onEnd({ status: 'failed' } as unknown as Parameters<AgenticReporter['onEnd']>[0]);
 
     const output = await streamToString(outputStream);
 
@@ -580,17 +683,14 @@ describe('AgenticReporter', () => {
 
   it('warns and still emits failure when detailed report file write fails', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    vi.mocked(fs.writeFileSync).mockImplementation((filePath) => {
-      if (String(filePath).endsWith('-details.xml')) {
-        throw new Error('disk full');
-      }
-    });
+    vi.mocked(fs.promises.writeFile).mockRejectedValueOnce(new Error('disk full'));
 
     reporter.onBegin(createConfig(), createSuite([mockTest]));
     reporter.onTestEnd(
       mockTest as unknown as Parameters<AgenticReporter['onTestEnd']>[0],
       mockResult as unknown as Parameters<AgenticReporter['onTestEnd']>[1]
     );
+    await reporter.onEnd({ status: 'failed' } as unknown as Parameters<AgenticReporter['onEnd']>[0]);
 
     const output = await streamToString(outputStream);
 
@@ -601,7 +701,7 @@ describe('AgenticReporter', () => {
     expect(output).toContain('<failure');
 
     warnSpy.mockRestore();
-    vi.mocked(fs.writeFileSync).mockReset();
+    vi.mocked(fs.promises.writeFile).mockReset();
   });
 
   it('warns and continues when manifest write fails', () => {
@@ -679,7 +779,7 @@ describe('AgenticReporter', () => {
     vi.mocked(fs.readdirSync).mockReturnValue(['old-details.xml'] as never);
 
     reporter.onBegin(createConfig(), createSuite([mockTest]));
-    reporter.onEnd({ status: 'passed' } as unknown as Parameters<AgenticReporter['onEnd']>[0]);
+    await reporter.onEnd({ status: 'passed' } as unknown as Parameters<AgenticReporter['onEnd']>[0]);
 
     const output = await streamToString(outputStream);
 
@@ -820,9 +920,7 @@ describe('AgenticReporter', () => {
 
   it('ignores deletion failures for stale detailed reports', () => {
     vi.mocked(fs.existsSync).mockReturnValue(true);
-    vi.mocked(fs.unlinkSync).mockImplementationOnce(() => {
-      throw new Error('locked');
-    });
+    vi.mocked(fs.promises.unlink).mockRejectedValueOnce(new Error('locked'));
 
     reporter.onBegin(createConfig(), createSuite([]));
     reporter.onTestEnd(
@@ -830,7 +928,7 @@ describe('AgenticReporter', () => {
       { ...mockResult, status: 'passed' } as unknown as Parameters<AgenticReporter['onTestEnd']>[1]
     );
 
-    expect(fs.unlinkSync).toHaveBeenCalled();
+    expect(fs.promises.unlink).toHaveBeenCalled();
   });
 });
 

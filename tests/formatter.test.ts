@@ -7,6 +7,7 @@ import {
   formatFailure,
   formatHeader,
   formatOverflowWarning,
+  formatProgress,
   formatSummary,
 } from '../src/formatter';
 import type { FailureContext, ResolvedOptions } from '../src/types';
@@ -33,17 +34,20 @@ describe('formatter', () => {
   });
 
   describe('sanitizeId', () => {
-    it('replaces non-alphanumeric characters with underscore', () => {
-      expect(sanitizeId('foo bar:baz')).toBe('foo_bar_baz');
+    it('replaces non-alphanumeric characters with underscore and appends hash', () => {
+      const result = sanitizeId('foo bar:baz');
+      expect(result).toMatch(/^foo_bar_baz_[a-f0-9]{8}$/);
     });
 
-    it('collapses multiple underscores', () => {
-      expect(sanitizeId('foo  bar')).toBe('foo_bar');
+    it('collapses multiple underscores and appends hash', () => {
+      const result = sanitizeId('foo  bar');
+      expect(result).toMatch(/^foo_bar_[a-f0-9]{8}$/);
     });
 
     it('truncates long strings', () => {
-      const longString = 'a'.repeat(200);
-      expect(sanitizeId(longString).length).toBe(100);
+      const longString = 'a'.repeat(300);
+      // 200 chars + '_' + 8 chars hash = 209
+      expect(sanitizeId(longString).length).toBe(209);
     });
   });
 
@@ -190,11 +194,19 @@ describe('formatter', () => {
     });
   });
 
+  describe('formatProgress', () => {
+    it('formats XML progress heartbeat', () => {
+      const progress = formatProgress(10, 2, 1, 0, 50, 15000);
+      expect(progress).toContain('<agentic_progress passed="10" failed="2" skipped="1" flaky="0" total="50" elapsed="15000ms" />');
+    });
+  });
+
   describe('formatSummary', () => {
     it('formats XML summary', () => {
-      const summary = formatSummary('passed', 10, 0, 0, 100);
+      const summary = formatSummary('passed', 10, 0, 0, 0, 100);
       expect(summary).toContain('<result_summary status="passed"');
       expect(summary).toContain('passed="10"');
+      expect(summary).toContain('flaky="0"');
       expect(summary).toContain('duration="100ms"');
       expect(summary).toContain('</test_run>');
     });

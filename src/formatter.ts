@@ -28,10 +28,28 @@ export function escapeXml(str: string): string {
 }
 
 /**
+ * FNV-1a 32-bit hash implementation.
+ * Faster than crypto.createHash('sha1') for short strings and sufficient for collision avoidance.
+ */
+function fnv1a(str: string): string {
+  let hash = 0x811c9dc5; // 2166136261 (32-bit offset basis)
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193); // 16777619 (32-bit prime)
+  }
+  // Force unsigned 32-bit and format as 8-char hex
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+/**
  * Sanitize a string for use as an XML id attribute.
  */
 export function sanitizeId(str: string): string {
-  return str.replace(/[^a-zA-Z0-9-]+/g, '_').slice(0, 100);
+  const hash = fnv1a(str);
+  const sanitized = str.replace(/[^a-zA-Z0-9-]+/g, '_');
+  // Truncate to 200 to leave room for hash (8 chars) + separator (1 char) = 9 chars.
+  // Total length <= 209 chars, well within 220 limit.
+  return `${sanitized.slice(0, 200)}_${hash}`;
 }
 
 /**
@@ -111,9 +129,14 @@ export function buildMarkdownContext(context: FailureContext, options: ResolvedO
 
   lines.push(`**Hint:** ${context.hint}`);
 
+  if (context.snapshotPath) {
+    lines.push('');
+    lines.push(`**Page Snapshot:** \`${context.snapshotPath}\``);
+  }
+
   if (context.detailsPath) {
     lines.push('');
-    lines.push(`**Full Details:** ${context.detailsPath}`);
+    lines.push(`**Full Details:** \`${context.detailsPath}\``);
   }
 
   return lines.join('\n');
@@ -134,6 +157,12 @@ export function formatFailure(context: FailureContext, options: ResolvedOptions)
   const detailsTag = context.detailsPath
     ? `\n    <details_file>${escapeXml(context.detailsPath)}</details_file>`
     : '';
+  const snapshotTag = context.snapshotPath
+    ? `\n    <snapshot_file>${escapeXml(context.snapshotPath)}</snapshot_file>`
+    : '';
+  const serverTag = context.workingServerUrl
+    ? `\n    <working_server>${escapeXml(context.workingServerUrl)}</working_server>`
+    : '';
 
   return `  <failure id="${context.failureId}" type="${context.errorType}" source="${failureSource.phase}" project="${escapeXml(projectName)}" test_id="${escapeXml(testId)}" file="${escapeXml(context.fileName)}" line="${context.lineNumber}" duration="${context.duration}ms" retry="${context.retry}">
     <error_summary>${escapeXml(context.errorMessage)}</error_summary>
@@ -144,8 +173,22 @@ export function formatFailure(context: FailureContext, options: ResolvedOptions)
     <context_markdown><![CDATA[
 ${markdown}
     ]]></context_markdown>
-    <reproduce_command>${escapeXml(context.reproduceCommand)}</reproduce_command>${detailsTag}
+    <reproduce_command>${escapeXml(context.reproduceCommand)}</reproduce_command>${serverTag}${snapshotTag}${detailsTag}
   </failure>`;
+}
+
+/**
+ * Format a progress heartbeat block.
+ */
+export function formatProgress(
+  passed: number,
+  failed: number,
+  skipped: number,
+  flaky: number,
+  total: number,
+  elapsed: number
+): string {
+  return `  <agentic_progress passed="${passed}" failed="${failed}" skipped="${skipped}" flaky="${flaky}" total="${total}" elapsed="${elapsed}ms" />`;
 }
 
 /**
@@ -161,7 +204,7 @@ export function formatHeader(totalTests: number, workers: number, project: strin
  */
 export function formatOverflowWarning(maxFailures: number, suppressedCount: number): string {
   return `  <overflow_warning suppressed="${suppressedCount}">
-    Max failure limit (${maxFailures}) reached. ${suppressedCount} additional failures suppressed. Fix the above issues first.
+    Max failure limit (${maxFailures}) reached. Execution aborted. Fix the above issues first.
   </overflow_warning>`;
 }
 
@@ -173,8 +216,9 @@ export function formatSummary(
   passed: number,
   failed: number,
   skipped: number,
+  flaky: number,
   duration: number
 ): string {
-  return `  <result_summary status="${status}" passed="${passed}" failed="${failed}" skipped="${skipped}" duration="${duration}ms" />
+  return `  <result_summary status="${status}" passed="${passed}" failed="${failed}" skipped="${skipped}" flaky="${flaky}" duration="${duration}ms" />
 </test_run>`;
 }

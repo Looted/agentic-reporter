@@ -35,7 +35,7 @@ export default defineConfig({
 
 | Option                       | Type           | Default | Description                                   |
 | ---------------------------- | -------------- | ------- | --------------------------------------------- |
-| `maxFailures`                | number         | 5       | Max failures before suppression               |
+| `maxFailures`                | number/boolean | false   | Max failures before stopping execution        |
 | `maxStackFrames`             | number         | 8       | Stack trace depth                             |
 | `maxLogLines`                | number         | 5       | Console log lines                             |
 | `maxLogChars`                | number         | 500     | Max log characters                            |
@@ -43,7 +43,28 @@ export default defineConfig({
 | `checkPreviousReports`       | boolean        | false   | Prompt to continue if previous failures exist |
 | `previousReportsPolicy`      | string         | prompt  | `prompt`, `warn`, `fail`, or `ignore`         |
 | `exitOnExceedingMaxFailures` | boolean        | false   | Stop execution when max failures reached      |
+| `progressInterval`           | number/boolean | 60000   | Interval in ms to emit an XML progress update |
 | `outputStream`               | WritableStream | stdout  | Custom output stream                          |
+| `getReproduceCommand`        | function       | -       | Custom callback to generate reproduce command |
+
+### Custom Reproduce Command
+
+You can customize the reproduce command output by providing a callback function. This is useful for wrapping the Playwright command in a shell script or custom runner.
+
+```typescript
+import { defineConfig } from '@playwright/test';
+import { agenticReporter } from '@looted/agentic-reporter';
+
+export default defineConfig({
+  reporter: [
+    agenticReporter({
+      getReproduceCommand: ({ file, line, project }) => {
+        return `./run-e2e.sh ${file}:${line} --project=${project}`;
+      },
+    }),
+  ],
+});
+```
 
 ## Output Format
 

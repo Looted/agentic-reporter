@@ -47,17 +47,19 @@ import { classifyError } from './hints';
 import {
   formatHeader,
   formatFailure,
+  formatProgress,
   formatOverflowWarning,
   formatSummary,
   cleanStack,
   sanitizeId,
   escapeXml,
 } from './formatter';
-import { getConsoleLogs } from './logProcessor';
+import { getConsoleLogs, truncateLogs } from './logProcessor';
+import { extractHtmlSnapshot } from './traceParser';
 
 /** Default configuration values */
 const DEFAULTS: ResolvedOptions = {
-  maxFailures: 5,
+  maxFailures: Infinity,
   maxStackFrames: 8,
   maxLogLines: 5,
   maxLogChars: 500,
@@ -66,6 +68,7 @@ const DEFAULTS: ResolvedOptions = {
   checkPreviousReports: false,
   previousReportsPolicy: 'prompt',
   exitOnExceedingMaxFailures: false,
+  progressInterval: 60000,
   outputStream: process.stdout,
 };
 
@@ -73,8 +76,18 @@ const DEFAULTS: ResolvedOptions = {
  * Validate and resolve options with defaults.
  */
 function resolveOptions(options: AgenticReporterOptions = {}): ResolvedOptions {
+  let maxFailures = options.maxFailures;
+  // If explicitly undefined, use default (which is now Infinity)
+  if (maxFailures === undefined) {
+    maxFailures = DEFAULTS.maxFailures;
+  }
+  // If explicitly false, use Infinity
+  if (maxFailures === false) {
+    maxFailures = Infinity;
+  }
+
   const resolved: ResolvedOptions = {
-    maxFailures: options.maxFailures ?? DEFAULTS.maxFailures,
+    maxFailures: maxFailures as number,
     maxStackFrames: options.maxStackFrames ?? DEFAULTS.maxStackFrames,
     maxLogLines: options.maxLogLines ?? DEFAULTS.maxLogLines,
     maxLogChars: options.maxLogChars ?? DEFAULTS.maxLogChars,
@@ -84,12 +97,14 @@ function resolveOptions(options: AgenticReporterOptions = {}): ResolvedOptions {
     previousReportsPolicy: options.previousReportsPolicy ?? DEFAULTS.previousReportsPolicy,
     exitOnExceedingMaxFailures:
       options.exitOnExceedingMaxFailures ?? DEFAULTS.exitOnExceedingMaxFailures,
+    progressInterval: options.progressInterval ?? DEFAULTS.progressInterval,
     outputStream: options.outputStream ?? DEFAULTS.outputStream,
+    getReproduceCommand: options.getReproduceCommand,
   };
 
   // Runtime validation
-  if (resolved.maxFailures < 1) {
-    console.warn('[AgenticReporter] maxFailures must be >= 1, using default');
+  if (resolved.maxFailures < 1 && resolved.maxFailures !== Infinity) {
+    console.warn('[AgenticReporter] maxFailures must be >= 1 or false, using default');
     resolved.maxFailures = DEFAULTS.maxFailures;
   }
   if (resolved.maxStackFrames < 1) {
@@ -105,25 +120,40 @@ class AgenticReporter implements Reporter {
   private failureCount = 0;
   private passedCount = 0;
   private skippedCount = 0;
+  private flakyCount = 0;
   private totalDuration = 0;
   private projectName = 'chromium';
+  private workingServerUrl?: string;
   private suppressedCount = 0;
   private outputDir = 'test-results';
   private readonly runId = `agentic-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   private readonly failedTestIds: string[] = [];
-  private totalTests = 0;
+  private existingReports = new Set<string>();
+  private pendingFileOps: Promise<void>[] = [];
+  private failedTestIdCounts = new Map<string, number>();
+  private totalTestsCount = 0;
   private workers = 0;
+  private startTime = 0;
+  private progressTimer?: NodeJS.Timeout;
 
   constructor(options: AgenticReporterOptions = {}) {
     this.options = resolveOptions(options);
   }
 
   onBegin(config: FullConfig, suite: Suite): void {
-    const totalTests = suite.allTests().length;
+    this.totalTestsCount = suite.allTests().length;
+    this.startTime = Date.now();
     const workers = config.workers;
-    this.totalTests = totalTests;
     this.workers = workers;
     this.outputDir = this.resolveOutputDir(config);
+    this.scanExistingReports();
+
+    // Extract base URL / webServer URL
+    if (config.webServer?.url) {
+      this.workingServerUrl = config.webServer.url;
+    } else if (config.projects.length > 0 && config.projects[0].use?.baseURL) {
+      this.workingServerUrl = config.projects[0].use.baseURL;
+    }
 
     // Get project name from first project if available
     if (config.projects.length > 0) {
@@ -144,7 +174,31 @@ class AgenticReporter implements Reporter {
       this.writeRunManifest('running');
     }
 
-    this.write(formatHeader(totalTests, workers, this.projectName));
+    this.write(formatHeader(this.totalTestsCount, workers, this.projectName));
+
+    if (this.options.progressInterval !== false && this.options.progressInterval > 0) {
+      this.progressTimer = setInterval(() => {
+        this.emitProgress();
+      }, this.options.progressInterval);
+      // Ensure timer doesn't keep process alive
+      if (this.progressTimer.unref) {
+        this.progressTimer.unref();
+      }
+    }
+  }
+
+  private emitProgress(): void {
+    const elapsed = Date.now() - this.startTime;
+    this.write(
+      formatProgress(
+        this.passedCount,
+        this.failureCount,
+        this.skippedCount,
+        this.flakyCount,
+        this.totalTestsCount,
+        elapsed
+      )
+    );
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -160,41 +214,92 @@ class AgenticReporter implements Reporter {
   onTestEnd(test: TestCase, result: TestResult): void {
     this.totalDuration += result.duration;
 
-    // Silence on Success: emit nothing for passing/skipped tests
-    if (result.status === 'passed') {
-      this.passedCount++;
-      this.deleteFailureReport(test);
-      return;
-    }
-
     if (result.status === 'skipped') {
       this.skippedCount++;
       return;
     }
 
-    // Count as failure (includes 'failed', 'timedOut', 'interrupted')
-    this.failureCount++;
+    const failureId = sanitizeId(test.titlePath().join('_'));
 
-    // Overflow Guard: stop emitting details if too many failures
-    if (this.failureCount > this.options.maxFailures) {
-      this.suppressedCount++;
-      if (this.options.exitOnExceedingMaxFailures) {
-        this.write(
-          `\n[AgenticReporter] Max failures (${this.options.maxFailures}) reached. Exiting immediately to save tokens.`
-        );
-        process.exit(1);
+    if (result.status === 'passed') {
+      if (result.retry === 0) {
+        this.passedCount++;
+        this.deleteFailureReport(test, failureId);
+      } else {
+        // Passed on retry -> Flaky
+        this.flakyCount++;
+        // If we previously counted this as a failure (due to incorrect suppression),
+        // we should correct the stats now that it has passed.
+        const previousFailures = this.failedTestIdCounts.get(failureId) || 0;
+        if (previousFailures > 0) {
+          this.failureCount -= previousFailures;
+          this.failedTestIdCounts.delete(failureId);
+        }
+
+        // We want to report flaky tests as failures so AI knows what went wrong.
+        // We find the most recent failed result for this test.
+        const failedResult = test.results
+          .slice()
+          .reverse()
+          .find(
+            (r) => r.status === 'failed' || r.status === 'timedOut' || r.status === 'interrupted'
+          );
+        if (failedResult) {
+          this.emitFailure(test, failedResult, failureId);
+        }
       }
       return;
     }
 
-    this.emitFailure(test, result);
-  }
-
-  onEnd(result: FullResult): void {
-    if (this.options.enableDetailedReport) {
-      this.writeRunManifest(result.status);
+    // Failure Case
+    // Only count/emit if this is the final attempt
+    const retries = test.retries ?? 0;
+    if (result.retry < retries) {
+      // Intermediate failure - suppress
+      return;
     }
 
+    // Count as failure (includes 'failed', 'timedOut', 'interrupted')
+    this.failureCount++;
+    const current = this.failedTestIdCounts.get(failureId) || 0;
+    this.failedTestIdCounts.set(failureId, current + 1);
+
+    // Overflow Guard: stop emitting details if too many failures
+    if (this.failureCount > this.options.maxFailures) {
+      this.suppressedCount++;
+      this.write(
+        `\n[AgenticReporter] Max failures (${this.options.maxFailures}) reached. Exiting immediately to save tokens.`
+      );
+      // Clean exit
+      this.printFooter('failed');
+      process.exit(1);
+    }
+
+    this.emitFailure(test, result, failureId);
+  }
+
+  onEnd(result: FullResult): Promise<void> | void {
+    if (this.progressTimer) {
+      clearInterval(this.progressTimer);
+      this.progressTimer = undefined;
+    }
+
+    const finalize = (): void => {
+      if (this.options.enableDetailedReport) {
+        this.writeRunManifest(result.status);
+      }
+      this.printFooter(result.status);
+    };
+
+    if (this.pendingFileOps.length === 0) {
+      finalize();
+      return;
+    }
+
+    return Promise.all(this.pendingFileOps).then(finalize);
+  }
+
+  private printFooter(status: string): void {
     // Emit overflow warning if failures were suppressed
     if (this.suppressedCount > 0) {
       this.write(formatOverflowWarning(this.options.maxFailures, this.suppressedCount));
@@ -203,21 +308,21 @@ class AgenticReporter implements Reporter {
     // Emit summary
     this.write(
       formatSummary(
-        result.status,
+        status,
         this.passedCount,
         this.failureCount,
         this.skippedCount,
+        this.flakyCount,
         this.totalDuration
       )
     );
   }
 
   /** Emit a single failure block with full context */
-  private emitFailure(test: TestCase, result: TestResult): void {
+  private emitFailure(test: TestCase, result: TestResult, failureId: string): void {
     const error = result.error;
     const errorMessage = error?.message ?? 'Unknown error';
     const { type: errorType, hint } = classifyError(errorMessage);
-    const failureId = sanitizeId(test.titlePath().join('_'));
     const projectName = this.getProjectName(test);
     const testId = this.getTestId(test, failureId);
     const fullTitlePath = test.titlePath().join(' › ');
@@ -226,7 +331,39 @@ class AgenticReporter implements Reporter {
 
     this.failedTestIds.push(testId);
 
-    // Generate detailed report if enabled
+    const reproduceCommand = this.options.getReproduceCommand
+      ? this.options.getReproduceCommand({
+          file: test.location.file,
+          line: test.location.line,
+          project: projectName,
+          title: test.title,
+        })
+      : `npx playwright test ${test.location.file}:${test.location.line} --project=${projectName}`;
+
+    const fullLogs = this.options.enableDetailedReport
+      ? this.getConsoleLogs(result, Infinity, Infinity)
+      : '';
+
+    let snapshotPath: string | undefined;
+    const traceAttachment = this.options.enableDetailedReport
+      ? result.attachments.find((a) => a.name === 'trace' && a.path?.endsWith('.zip'))
+      : undefined;
+
+    if (traceAttachment?.path) {
+      const snapshotFileName = `${failureId}-snapshot.html`;
+      const snapshotFilePath = path.join(this.outputDir, snapshotFileName);
+      snapshotPath = snapshotFilePath;
+      const tracePath = traceAttachment.path;
+      const extractOp = fs.promises
+        .mkdir(this.outputDir, { recursive: true })
+        .then(() => extractHtmlSnapshot(tracePath, snapshotFilePath))
+        .then(() => undefined)
+        .catch(() => undefined);
+
+      this.pendingFileOps.push(extractOp);
+    }
+
+    // Generate detailed report asynchronously
     if (this.options.enableDetailedReport) {
       const fullContext: FailureContext = {
         failureId,
@@ -241,11 +378,13 @@ class AgenticReporter implements Reporter {
         retry: result.retry,
         errorMessage,
         stack: cleanStack(error?.stack ?? '', 1000), // High limit for detailed report
-        logs: this.getConsoleLogs(result, Infinity, Infinity),
+        logs: fullLogs,
         attachments: this.options.includeAttachments ? this.getAttachments(result) : '',
         hint,
         title: test.title,
-        reproduceCommand: `npx playwright test ${test.location.file}:${test.location.line} --project=${projectName}`,
+        reproduceCommand,
+        snapshotPath,
+        workingServerUrl: this.workingServerUrl,
       };
 
       const fileContent = formatFailure(fullContext, {
@@ -257,14 +396,20 @@ class AgenticReporter implements Reporter {
       const fullPath = path.join(this.outputDir, fileName);
       detailsPath = fullPath;
 
-      try {
-        fs.mkdirSync(this.outputDir, { recursive: true });
-        fs.writeFileSync(fullPath, fileContent);
-      } catch (err) {
-        console.warn(`[AgenticReporter] Failed to write detailed report to ${fullPath}:`, err);
-      }
+      const writeOp = fs.promises
+        .mkdir(this.outputDir, { recursive: true })
+        .then(() => fs.promises.writeFile(fullPath, fileContent))
+        .then(() => {
+          this.existingReports.add(fileName);
+        })
+        .catch((err) => {
+          console.warn(`[AgenticReporter] Failed to write detailed report to ${fullPath}:`, err);
+        });
+
+      this.pendingFileOps.push(writeOp);
     }
 
+    // Emit standard output synchronously to maintain correct ordering
     const context: FailureContext = {
       failureId,
       errorType,
@@ -278,12 +423,16 @@ class AgenticReporter implements Reporter {
       retry: result.retry,
       errorMessage,
       stack: cleanStack(error?.stack ?? '', this.options.maxStackFrames),
-      logs: this.getConsoleLogs(result, this.options.maxLogLines, this.options.maxLogChars),
+      logs: this.options.enableDetailedReport
+        ? truncateLogs(fullLogs, this.options.maxLogLines, this.options.maxLogChars)
+        : this.getConsoleLogs(result, this.options.maxLogLines, this.options.maxLogChars),
       attachments: this.options.includeAttachments ? this.getAttachments(result) : '',
       hint,
       title: test.title,
-      reproduceCommand: `npx playwright test ${test.location.file}:${test.location.line} --project=${projectName}`,
+      reproduceCommand,
       detailsPath,
+      snapshotPath,
+      workingServerUrl: this.workingServerUrl,
     };
 
     this.write(formatFailure(context, this.options));
@@ -372,7 +521,7 @@ class AgenticReporter implements Reporter {
       runId: this.runId,
       status,
       project: this.projectName,
-      totalTests: this.totalTests,
+      totalTests: this.totalTestsCount,
       workers: this.workers,
       passed: this.passedCount,
       failed: this.failureCount,
@@ -388,6 +537,21 @@ class AgenticReporter implements Reporter {
       fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
     } catch (err) {
       console.warn(`[AgenticReporter] Failed to write run manifest to ${manifestPath}:`, err);
+    }
+  }
+
+  private scanExistingReports(): void {
+    if (!this.options.enableDetailedReport || !fs.existsSync(this.outputDir)) return;
+
+    try {
+      const files = fs.readdirSync(this.outputDir);
+      for (const file of files) {
+        if (file.endsWith('-details.xml')) {
+          this.existingReports.add(file);
+        }
+      }
+    } catch {
+      // Ignore directory read errors
     }
   }
 
@@ -423,10 +587,7 @@ ${reportFiles.map((file) => `    <failure>${escapeXml(file)}</failure>`).join('\
 
   /** Check for existing failure reports and prompt user */
   private checkForExistingReports(): void {
-    if (!fs.existsSync(this.outputDir)) return;
-
-    const files = fs.readdirSync(this.outputDir);
-    const reportFiles = files.filter((f) => f.endsWith('-details.xml'));
+    const reportFiles = Array.from(this.existingReports);
 
     if (reportFiles.length > 0) {
       const failureList = reportFiles
@@ -486,27 +647,29 @@ ${failureList}
           this.write('Exiting...');
           process.exit(1);
         }
-      } catch (e) {
-        this.write(`\n[AgenticReporter] Failed to read input: ${e}. Proceeding...`);
+      } catch (err) {
+        this.write(`
+[AgenticReporter] Failed to read input: ${err}. Proceeding...`);
       }
     }
   }
 
   /** Delete failure report for a passing test */
-  private deleteFailureReport(test: TestCase): void {
+  private deleteFailureReport(test: TestCase, failureId: string): void {
     if (!this.options.enableDetailedReport) return;
 
-    const failureId = sanitizeId(test.titlePath().join('_'));
-    const fileName = `${failureId}-details.xml`;
-    const fullPath = path.join(this.outputDir, fileName);
+    const detailsFileName = `${failureId}-details.xml`;
+    const detailsFullPath = path.join(this.outputDir, detailsFileName);
+    const snapshotFileName = `${failureId}-snapshot.html`;
+    const snapshotFullPath = path.join(this.outputDir, snapshotFileName);
 
-    if (fs.existsSync(fullPath)) {
-      try {
-        fs.unlinkSync(fullPath);
-      } catch {
-        // Ignore deletion errors
-      }
-    }
+    this.existingReports.delete(detailsFileName);
+
+    // We explicitly delete rather than checking existingReports
+    // because reports might be present from a completely different prior run
+    // without having been tracked, or from the same run before existingReports was synced.
+    this.pendingFileOps.push(fs.promises.unlink(detailsFullPath).catch(() => {}));
+    this.pendingFileOps.push(fs.promises.unlink(snapshotFullPath).catch(() => {}));
   }
 }
 

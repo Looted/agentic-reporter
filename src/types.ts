@@ -5,8 +5,8 @@
 
 /** Configuration options for the AgenticStream reporter */
 export interface AgenticReporterOptions {
-  /** Maximum failures to report before suppressing (default: 5) */
-  maxFailures?: number;
+  /** Maximum failures before stopping execution (default: false). Set to a number to enable. */
+  maxFailures?: number | false;
   /** Maximum stack trace frames to include (default: 8) */
   maxStackFrames?: number;
   /** Maximum console log lines to include (default: 5) */
@@ -17,19 +17,39 @@ export interface AgenticReporterOptions {
   includeAttachments?: boolean;
   /** Enable detailed report file generation (default: true) */
   enableDetailedReport?: boolean;
-  /** Check for previous failure reports on start and prompt to continue (default: false) */
+  /** Check for previous failure reports on start and warn if found (default: false) */
   checkPreviousReports?: boolean;
   /** Behavior when previous failure reports exist (default: prompt) */
   previousReportsPolicy?: PreviousReportsPolicy;
   /** Immediately terminate execution when max failures is reached (default: false) */
   exitOnExceedingMaxFailures?: boolean;
+  /** Interval in milliseconds to emit an XML progress update, or false to disable (default: 60000) */
+  progressInterval?: number | false;
   /** Custom output stream (default: process.stdout) */
   outputStream?: NodeJS.WritableStream;
+  /** Custom callback to generate reproduce command */
+  getReproduceCommand?: (data: ReproduceCommandData) => string;
+}
+
+/** Data passed to the getReproduceCommand callback */
+export interface ReproduceCommandData {
+  file: string;
+  line: number;
+  project: string;
+  title: string;
 }
 
 /** Resolved options with all defaults applied */
-export type ResolvedOptions = Required<Omit<AgenticReporterOptions, 'outputStream'>> & {
+export type ResolvedOptions = Required<
+  Omit<
+    AgenticReporterOptions,
+    'outputStream' | 'maxFailures' | 'progressInterval' | 'getReproduceCommand'
+  >
+> & {
+  maxFailures: number;
+  progressInterval: number | false;
   outputStream: NodeJS.WritableStream;
+  getReproduceCommand?: (data: ReproduceCommandData) => string;
 };
 
 /** Non-interactive behavior for previous failure reports */
@@ -97,4 +117,8 @@ export interface FailureContext {
   reproduceCommand: string;
   /** Path to the detailed report file */
   detailsPath?: string;
+  /** Extracted HTML snapshot path */
+  snapshotPath?: string;
+  /** Working server URL from config */
+  workingServerUrl?: string;
 }
