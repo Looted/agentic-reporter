@@ -19,6 +19,8 @@ export interface AgenticReporterOptions {
   enableDetailedReport?: boolean;
   /** Check for previous failure reports on start and prompt to continue (default: false) */
   checkPreviousReports?: boolean;
+  /** Behavior when previous failure reports exist (default: prompt) */
+  previousReportsPolicy?: PreviousReportsPolicy;
   /** Immediately terminate execution when max failures is reached (default: false) */
   exitOnExceedingMaxFailures?: boolean;
   /** Custom output stream (default: process.stdout) */
@@ -30,8 +32,22 @@ export type ResolvedOptions = Required<Omit<AgenticReporterOptions, 'outputStrea
   outputStream: NodeJS.WritableStream;
 };
 
+/** Non-interactive behavior for previous failure reports */
+export type PreviousReportsPolicy = 'prompt' | 'warn' | 'fail' | 'ignore';
+
 /** Error type classification for debugging hints */
 export type ErrorType = 'timeout' | 'assertion' | 'network' | 'interrupted' | 'unknown';
+
+/** High-level phase where a failure originated */
+export type FailurePhase = 'setup' | 'data_setup' | 'assertion' | 'runtime' | 'unknown';
+
+/** Failure source summary for agents */
+export interface FailureSource {
+  /** Phase where the failure likely originated */
+  phase: FailurePhase;
+  /** Concise human-readable summary */
+  summary: string;
+}
 
 /** Hint pattern for error classification */
 export interface HintPattern {
@@ -49,6 +65,14 @@ export interface FailureContext {
   failureId: string;
   /** Error type classification */
   errorType: ErrorType;
+  /** Playwright project name */
+  projectName?: string;
+  /** Playwright test id when available */
+  testId?: string;
+  /** Full Playwright title path */
+  fullTitlePath?: string;
+  /** High-level source of the failure */
+  failureSource?: FailureSource;
   /** Base filename */
   fileName: string;
   /** Line number of test */

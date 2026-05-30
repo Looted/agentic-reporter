@@ -70,10 +70,21 @@ export function cleanStack(stack: string, maxFrames: number): string {
  */
 export function buildMarkdownContext(context: FailureContext, options: ResolvedOptions): string {
   const lines: string[] = [];
+  const projectName = context.projectName ?? 'unknown';
+  const testId = context.testId ?? context.failureId;
+  const fullTitlePath = context.fullTitlePath ?? context.title;
+  const failureSource = context.failureSource ?? {
+    phase: 'unknown' as const,
+    summary: 'unknown failure source',
+  };
 
   lines.push(`**Test:** ${context.title}`);
   lines.push(`**File:** \`${context.fileName}:${context.lineNumber}\``);
   lines.push(`**Duration:** ${context.duration}ms`);
+  lines.push(`**Project:** ${projectName}`);
+  lines.push(`**Test ID:** ${testId}`);
+  lines.push(`**Title Path:** ${fullTitlePath}`);
+  lines.push(`**Failure Source:** ${failureSource.summary}`);
   lines.push('');
 
   if (context.stack) {
@@ -113,12 +124,23 @@ export function buildMarkdownContext(context: FailureContext, options: ResolvedO
  */
 export function formatFailure(context: FailureContext, options: ResolvedOptions): string {
   const markdown = buildMarkdownContext(context, options);
+  const projectName = context.projectName ?? 'unknown';
+  const testId = context.testId ?? context.failureId;
+  const fullTitlePath = context.fullTitlePath ?? context.title;
+  const failureSource = context.failureSource ?? {
+    phase: 'unknown' as const,
+    summary: 'unknown failure source',
+  };
   const detailsTag = context.detailsPath
     ? `\n    <details_file>${escapeXml(context.detailsPath)}</details_file>`
     : '';
 
-  return `  <failure id="${context.failureId}" type="${context.errorType}" file="${escapeXml(context.fileName)}" line="${context.lineNumber}" duration="${context.duration}ms" retry="${context.retry}">
+  return `  <failure id="${context.failureId}" type="${context.errorType}" source="${failureSource.phase}" project="${escapeXml(projectName)}" test_id="${escapeXml(testId)}" file="${escapeXml(context.fileName)}" line="${context.lineNumber}" duration="${context.duration}ms" retry="${context.retry}">
     <error_summary>${escapeXml(context.errorMessage)}</error_summary>
+    <project>${escapeXml(projectName)}</project>
+    <test_id>${escapeXml(testId)}</test_id>
+    <full_title_path>${escapeXml(fullTitlePath)}</full_title_path>
+    <failure_source phase="${failureSource.phase}">${escapeXml(failureSource.summary)}</failure_source>
     <context_markdown><![CDATA[
 ${markdown}
     ]]></context_markdown>

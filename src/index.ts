@@ -17,8 +17,11 @@ export type {
   AgenticReporterOptions,
   ResolvedOptions,
   ErrorType,
+  FailurePhase,
+  FailureSource,
   HintPattern,
   FailureContext,
+  PreviousReportsPolicy,
 } from './types';
 
 // Utilities (for custom extensions)

@@ -64,17 +64,17 @@ describe('formatter', () => {
     });
 
     it('respects maxFrames', () => {
-        const stack = `Error: foo
+      const stack = `Error: foo
     at a (a.js:1:1)
     at b (b.js:1:1)
     at c (c.js:1:1)`;
-        // Assuming a.js, b.js, c.js are not filtered out
-        const cleaned = cleanStack(stack, 2);
-        // The first line is usually the error message which is split by newline in cleanStack?
-        // Let's check cleanStack implementation:
-        // stack.split('\n').filter(...).slice(0, maxFrames).join('\n')
-        // Usually stack includes "Error: foo" at the top.
-        expect(cleaned.split('\n').length).toBeLessThanOrEqual(2);
+      // Assuming a.js, b.js, c.js are not filtered out
+      const cleaned = cleanStack(stack, 2);
+      // The first line is usually the error message which is split by newline in cleanStack?
+      // Let's check cleanStack implementation:
+      // stack.split('\n').filter(...).slice(0, maxFrames).join('\n')
+      // Usually stack includes "Error: foo" at the top.
+      expect(cleaned.split('\n').length).toBeLessThanOrEqual(2);
     });
 
     it('handles mixed newlines', () => {
@@ -111,10 +111,13 @@ describe('formatter', () => {
 
   describe('formatFailure', () => {
     it('includes attachments and details file when present', () => {
-      const output = formatFailure(createFailureContext({
-        attachments: '- trace: `trace.zip`',
-        detailsPath: 'test-results/failure-details.xml',
-      }), createOptions());
+      const output = formatFailure(
+        createFailureContext({
+          attachments: '- trace: `trace.zip`',
+          detailsPath: 'test-results/failure-details.xml',
+        }),
+        createOptions()
+      );
 
       expect(output).toContain('**Attachments:**');
       expect(output).toContain('- trace: `trace.zip`');
@@ -122,12 +125,15 @@ describe('formatter', () => {
     });
 
     it('omits optional sections when context has no stack logs attachments or details', () => {
-      const output = formatFailure(createFailureContext({
-        stack: '',
-        logs: '',
-        attachments: '',
-        detailsPath: undefined,
-      }), createOptions());
+      const output = formatFailure(
+        createFailureContext({
+          stack: '',
+          logs: '',
+          attachments: '',
+          detailsPath: undefined,
+        }),
+        createOptions()
+      );
 
       expect(output).not.toContain('**Error Stack:**');
       expect(output).not.toContain('**Console Logs');
@@ -136,12 +142,34 @@ describe('formatter', () => {
     });
 
     it('builds markdown context with attachment section', () => {
-      const markdown = buildMarkdownContext(createFailureContext({
-        attachments: '- screenshot: `screen.png`',
-      }), createOptions());
+      const markdown = buildMarkdownContext(
+        createFailureContext({
+          attachments: '- screenshot: `screen.png`',
+        }),
+        createOptions()
+      );
 
       expect(markdown).toContain('**Attachments:**');
       expect(markdown).toContain('- screenshot: `screen.png`');
+    });
+
+    it('uses backward-compatible defaults for older failure contexts', () => {
+      const output = formatFailure(
+        createFailureContext({
+          projectName: undefined,
+          testId: undefined,
+          fullTitlePath: undefined,
+          failureSource: undefined,
+        }),
+        createOptions()
+      );
+
+      expect(output).toContain('<project>unknown</project>');
+      expect(output).toContain('<test_id>sample_failure</test_id>');
+      expect(output).toContain(
+        '<failure_source phase="unknown">unknown failure source</failure_source>'
+      );
+      expect(output).toContain('**Title Path:** sample test');
     });
   });
 
@@ -154,21 +182,21 @@ describe('formatter', () => {
 
   describe('formatHeader', () => {
     it('formats XML header', () => {
-        const header = formatHeader(10, 4, 'my-project');
-        expect(header).toContain('<test_run>');
-        expect(header).toContain('total="10"');
-        expect(header).toContain('workers="4"');
-        expect(header).toContain('project="my-project"');
+      const header = formatHeader(10, 4, 'my-project');
+      expect(header).toContain('<test_run>');
+      expect(header).toContain('total="10"');
+      expect(header).toContain('workers="4"');
+      expect(header).toContain('project="my-project"');
     });
   });
 
   describe('formatSummary', () => {
     it('formats XML summary', () => {
-        const summary = formatSummary('passed', 10, 0, 0, 100);
-        expect(summary).toContain('<result_summary status="passed"');
-        expect(summary).toContain('passed="10"');
-        expect(summary).toContain('duration="100ms"');
-        expect(summary).toContain('</test_run>');
+      const summary = formatSummary('passed', 10, 0, 0, 100);
+      expect(summary).toContain('<result_summary status="passed"');
+      expect(summary).toContain('passed="10"');
+      expect(summary).toContain('duration="100ms"');
+      expect(summary).toContain('</test_run>');
     });
   });
 });
@@ -177,6 +205,10 @@ function createFailureContext(overrides: Partial<FailureContext> = {}): FailureC
   return {
     failureId: 'sample_failure',
     errorType: 'assertion',
+    projectName: 'chromium',
+    testId: 'sample-test-id',
+    fullTitlePath: 'sample.spec.ts › sample test',
+    failureSource: { phase: 'assertion', summary: 'assertion failure' },
     fileName: 'sample.spec.ts',
     lineNumber: 12,
     duration: 34,
@@ -201,6 +233,7 @@ function createOptions(): ResolvedOptions {
     includeAttachments: true,
     enableDetailedReport: true,
     checkPreviousReports: false,
+    previousReportsPolicy: 'prompt',
     exitOnExceedingMaxFailures: false,
     outputStream: process.stdout,
   };
