@@ -23,6 +23,8 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: '24'
+          registry-url: 'https://registry.npmjs.org/'
+          scope: '@looted'
           package-manager-cache: false
 
       - name: Install dependencies
@@ -37,10 +39,19 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Verify NPM Token
+        run: npm whoami
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: Publish (Dry Run)
         if: ${{ inputs.dry-run == true }}
         run: npm publish --provenance --access public --dry-run
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish
         if: ${{ inputs.dry-run == false }}
         run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
